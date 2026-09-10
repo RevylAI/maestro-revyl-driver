@@ -1,0 +1,6 @@
+appId: com.example.app
+---
+- launchApp:
+    stopApp: false
+    permissions: {}
+- assertVisible: Continue

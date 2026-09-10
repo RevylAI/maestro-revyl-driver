@@ -1,0 +1,7 @@
+appId: com.example.app
+---
+- assertVisible: Continue
+- tapOn: Continue
+- assertVisible: Welcome
+- assertNotVisible: Continue
+- takeScreenshot: smoke

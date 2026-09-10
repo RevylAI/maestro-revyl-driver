@@ -1,0 +1,9 @@
+.gradle/
+.kotlin/
+build/
+.revyl-maestro/
+.env
+.env.*
+*.log
+.idea/
+*.iml
