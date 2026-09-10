@@ -22,6 +22,7 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
     val requests = CopyOnWriteArrayList<RecordedRequest>()
     var intercept: (RecordedRequest) -> Reply? = { null }
+    var healthOverrides: Map<String, Any?> = emptyMap()
     private var tapped = false
     val origin: String get() = "http://127.0.0.1:${server.address.port}"
     val environment: Map<String, String> get() = mapOf("REVYL_API_KEY" to FIXTURE_KEY, "REVYL_MAESTRO_API_URL" to origin, "REVYL_MAESTRO_FLOW_TIMEOUT_MS" to "20000")
@@ -37,12 +38,20 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
                     request.authorization != "Bearer $FIXTURE_KEY" -> Reply(401, PRIVATE_SENTINEL.toByteArray())
                     request.path == "/api/v1/execution/device-sessions/$SESSION" && request.method == "GET" -> Reply(bytes = session())
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/hierarchy" && request.method == "GET" -> Reply(bytes = hierarchy())
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/health" && request.method == "GET" -> Reply(bytes = health())
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/screenshot" && request.method == "GET" -> Reply(bytes = png(if (platform == "ios") 300 else 100, if (platform == "ios") 600 else 200))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/tap" && request.method == "POST" -> {
                         tapped = true
                         Reply(bytes = "{\"success\":true,\"action\":\"tap\"}".toByteArray())
                     }
-                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/launch" && request.method == "POST" -> Reply(bytes = "{\"success\":true,\"action\":\"launch\"}".toByteArray())
+                    request.method == "POST" && request.path in setOf("launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "text-input", "drag").map { "/api/v1/execution/device-proxy/$WORKFLOW/$it" } -> {
+                        val action = when (request.path.substringAfterLast('/')) {
+                            "longpress" -> "long_press"
+                            "text-input" -> "input"
+                            else -> request.path.substringAfterLast('/')
+                        }
+                        Reply(bytes = json.writeValueAsBytes(mapOf("success" to true, "action" to action)))
+                    }
                     else -> Reply(404, PRIVATE_SENTINEL.toByteArray())
                 }
                 if (reply.disconnect) { exchange.close(); return@createContext }
@@ -58,6 +67,8 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
     }
 
     fun session(overrides: Map<String, Any?> = emptyMap()): ByteArray = json.writeValueAsBytes(mapOf("id" to SESSION, "workflow_run_id" to WORKFLOW, "status" to "running", "platform" to platform) + overrides)
+
+    fun health(): ByteArray = json.writeValueAsBytes(mapOf("status" to "ok", "workflow_run_id" to WORKFLOW, "platform" to platform, "device_connected" to true) + healthOverrides)
 
     fun hierarchy(): ByteArray {
         val text = if (tapped) "Welcome" else "Continue"

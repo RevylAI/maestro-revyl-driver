@@ -148,27 +148,84 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     override fun killApp(appId: String): Nothing = unsupported()
     override fun clearAppState(appId: String): Nothing = unsupported()
     override fun clearKeychain(): Nothing = unsupported()
-    override fun longPress(point: Point): Nothing = unsupported()
-    override fun pressKey(code: KeyCode): Nothing = unsupported()
-    override fun scrollVertical(): Nothing = unsupported()
+    override fun longPress(point: Point) = client.guard {
+        val info = deviceInfo()
+        requireAdapter(point.x in 0 until info.widthGrid && point.y in 0 until info.heightGrid, "Long-press coordinates must be inside the native viewport.")
+        client.act("longpress", mapOf("x" to point.x, "y" to point.y, "duration_ms" to 3_000))
+    }
+
+    override fun pressKey(code: KeyCode) = client.guard {
+        requireSupportedKey(code, platform)
+        when (code) {
+            KeyCode.ENTER, KeyCode.BACKSPACE -> client.act("key", mapOf("key" to code.name))
+            KeyCode.HOME -> client.act("go_home", emptyMap())
+            KeyCode.BACK -> backPress()
+            else -> unsupported()
+        }
+    }
+    override fun scrollVertical() {
+        val info = deviceInfo()
+        swipe(Point(info.widthGrid / 2, info.heightGrid / 2), Point(info.widthGrid / 2, info.heightGrid / 10), if (platform == "ios") 333 else 400)
+    }
     override fun isKeyboardVisible(): Nothing = unsupported()
-    override fun swipe(start: Point, end: Point, durationMs: Long): Nothing = unsupported()
-    override fun swipe(swipeDirection: SwipeDirection, durationMs: Long): Nothing = unsupported()
-    override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long): Nothing = unsupported()
-    override fun backPress(): Nothing = unsupported()
-    override fun inputText(text: String): Nothing = unsupported()
-    override fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean): Nothing = unsupported()
+    override fun swipe(start: Point, end: Point, durationMs: Long) = client.guard {
+        requireSwipeDuration(durationMs)
+        val info = deviceInfo()
+        requireAdapter(start != end && listOf(start, end).all { it.x in 0 until info.widthGrid && it.y in 0 until info.heightGrid }, "Swipe endpoints must differ and lie inside the native viewport.")
+        client.act("drag", mapOf("start_x" to start.x, "start_y" to start.y, "end_x" to end.x, "end_y" to end.y, "duration_ms" to durationMs))
+    }
+
+    override fun swipe(swipeDirection: SwipeDirection, durationMs: Long) {
+        val info = deviceInfo()
+        val start = when (swipeDirection) {
+            SwipeDirection.UP -> Point(info.widthGrid / 2, if (platform == "ios") info.heightGrid * 9 / 10 else info.heightGrid / 2)
+            SwipeDirection.DOWN -> Point(info.widthGrid / 2, info.heightGrid / 5)
+            SwipeDirection.LEFT -> Point(info.widthGrid * 9 / 10, info.heightGrid / 2)
+            SwipeDirection.RIGHT -> Point(info.widthGrid / 10, info.heightGrid / 2)
+        }
+        swipe(start, swipeDirection, durationMs)
+    }
+
+    override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) {
+        val info = deviceInfo()
+        val end = when (direction) {
+            SwipeDirection.UP -> Point(elementPoint.x, info.heightGrid / 10)
+            SwipeDirection.DOWN -> Point(elementPoint.x, info.heightGrid * 9 / 10)
+            SwipeDirection.LEFT -> Point(info.widthGrid / 10, elementPoint.y)
+            SwipeDirection.RIGHT -> Point(info.widthGrid * 9 / 10, elementPoint.y)
+        }
+        swipe(elementPoint, end, durationMs)
+    }
+    override fun backPress() = client.guard {
+        if (platform != "android") unsupported()
+        client.act("back", emptyMap())
+    }
+    override fun inputText(text: String) = client.guard {
+        if (platform != "android") unsupported()
+        requireFocusedText(text)
+        client.act("text-input", mapOf("text" to text))
+    }
+    override fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean) = client.guard {
+        requirePlainLink(link, autoVerify, browser)
+        client.act("open_url", mapOf("url" to link))
+    }
     override fun hideKeyboard(): Nothing = unsupported()
     override fun startScreenRecording(out: Sink): ScreenRecording = unsupported()
-    override fun setLocation(latitude: Double, longitude: Double): Nothing = unsupported()
+    override fun setLocation(latitude: Double, longitude: Double) = client.guard {
+        requireLocation(latitude, longitude)
+        client.act("set_location", mapOf("latitude" to latitude, "longitude" to longitude))
+    }
     override fun setOrientation(orientation: DeviceOrientation): Nothing = unsupported()
-    override fun eraseText(charactersToErase: Int): Nothing = unsupported()
+    override fun eraseText(charactersToErase: Int) = client.guard {
+        requireAdapter(charactersToErase in 1..MAX_ERASE_CHARACTERS, "Erase count must be an integer from 1 to 100.")
+        repeat(charactersToErase) { pressKey(KeyCode.BACKSPACE) }
+    }
     override fun setProxy(host: String, port: Int): Nothing = unsupported()
     override fun resetProxy(): Nothing = unsupported()
     override fun addMedia(mediaFiles: List<File>): Nothing = unsupported()
     override fun isAirplaneModeEnabled(): Boolean = unsupported()
     override fun setAirplaneMode(enabled: Boolean): Nothing = unsupported()
     override fun isDarkModeEnabled(): Boolean = unsupported()
-    override fun setDarkMode(enabled: Boolean): Nothing = unsupported()
+    override fun setDarkMode(enabled: Boolean) { client.act("set_appearance", mapOf("appearance" to if (enabled) "dark" else "light")) }
     override fun queryOnDeviceElements(query: OnDeviceElementQuery): List<TreeNode> = unsupported()
 }

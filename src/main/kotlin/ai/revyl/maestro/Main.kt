@@ -44,11 +44,12 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
         val settings = ConnectionSettings.fromEnvironment(environment)
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(flowTimeout)
         val future = executor.submit<Boolean> {
-            val commands = FlowPreflight.validate(YamlCommandReader.readCommands(flow))
+            val commands = FlowPreflight.validate(YamlCommandReader.readCommands(flow), args[3])
             FlowPreflight.prepareScreenshotDirectory(commands)
             RevylClient(settings, deadline).use { connection ->
                 client.set(connection)
                 connection.attach(args[1], args[3])
+                connection.verifyCapabilities(FlowPreflight.requiredCapabilities(commands))
                 val driver = RevylDriver(connection, args[3])
                 try {
                     driver.open()
@@ -70,7 +71,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
         val success = try { future.get(flowTimeout, TimeUnit.MILLISECONDS) } catch (_: TimeoutException) {
             client.get()?.close()
             future.cancel(true)
-            throw AdapterFailure("Flow execution timed out. An action may have executed; nothing was retried.")
+            throw AdapterFailure("Flow execution timed out. An action may have executed; no adapter retry was attempted.")
         } catch (failure: ExecutionException) {
             throw failure.cause ?: failure
         }
