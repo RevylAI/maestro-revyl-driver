@@ -28,6 +28,11 @@ data class NativeHierarchy(val root: TreeNode, val widthPoints: Int?, val height
 private class HierarchyParser {
     private var count = 0
 
+    private companion object {
+        const val ANDROID_UIAUTOMATOR_FOOTER = "UI hierchary dumped to: /dev/tty"
+        val ANDROID_HIERARCHY_CLOSE = "</hierarchy>".toByteArray(Charsets.UTF_8)
+    }
+
     private fun visit(depth: Int) {
         requireAdapter(depth <= 100 && ++count <= 10_000, "Native hierarchy exceeds structural limits.")
     }
@@ -49,9 +54,31 @@ private class HierarchyParser {
             override fun error(exception: SAXParseException): Nothing = throw exception
             override fun fatalError(exception: SAXParseException): Nothing = throw exception
         })
-        val document = builder.parse(ByteArrayInputStream(bytes)).documentElement
+        val document = builder.parse(ByteArrayInputStream(normalizeAndroidUiAutomatorFooter(bytes))).documentElement
         requireAdapter(document.tagName == "hierarchy", "Expected UIAutomator hierarchy.")
         return NativeHierarchy(TreeNode(children = androidChildren(document, 0)), null, null)
+    }
+
+    private fun normalizeAndroidUiAutomatorFooter(bytes: ByteArray): ByteArray {
+        val footer = ANDROID_UIAUTOMATOR_FOOTER.toByteArray(Charsets.UTF_8)
+        val footerStart = when {
+            bytes.endsWith(footer + "\r\n".toByteArray(Charsets.UTF_8)) -> bytes.size - footer.size - 2
+            bytes.endsWith(footer + "\n".toByteArray(Charsets.UTF_8)) -> bytes.size - footer.size - 1
+            bytes.endsWith(footer) -> bytes.size - footer.size
+            else -> return bytes
+        }
+        val xmlEnd = when {
+            footerStart >= 2 && bytes[footerStart - 2] == 13.toByte() && bytes[footerStart - 1] == 10.toByte() -> footerStart - 2
+            footerStart >= 1 && bytes[footerStart - 1] == 10.toByte() -> footerStart - 1
+            else -> footerStart
+        }
+        return if (bytes.endsWith(ANDROID_HIERARCHY_CLOSE, xmlEnd)) bytes.copyOf(xmlEnd) else bytes
+    }
+
+    private fun ByteArray.endsWith(suffix: ByteArray, end: Int = size): Boolean {
+        if (end < suffix.size) return false
+        val start = end - suffix.size
+        return suffix.indices.all { index -> this[start + index] == suffix[index] }
     }
 
     private fun androidChildren(parent: Element, depth: Int): List<TreeNode> = buildList {

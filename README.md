@@ -2,8 +2,8 @@
 
 Run supported native Maestro flows against an **existing Revyl Android or iOS
 session**. This experimental runner embeds Maestro's parser and execution
-engine; it is not a plugin for stock `maestro test`. Live-device compatibility
-has not yet been verified.
+engine; it is not a plugin for stock `maestro test`. The smoke flow has been
+verified against synthetic apps on staging Android and iOS devices.
 
 ## Install
 
