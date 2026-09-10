@@ -17,7 +17,7 @@ cd maestro-revyl-driver
 
 ## Run
 
-[Prepare a Revyl session](https://docs.revyl.com/cli/device/quickstart) with your
+[Prepare a Revyl session](https://docs.revyl.ai/cli/device/quickstart) with your
 app already installed and running. Adapt [examples/smoke.yaml](examples/smoke.yaml)
 to your app; this sample expects tapping **Continue** to show **Welcome**:
 
