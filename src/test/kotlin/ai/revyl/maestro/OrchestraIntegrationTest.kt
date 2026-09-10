@@ -261,7 +261,7 @@ class OrchestraIntegrationTest {
                 Files.writeString(flow, "appId: com.example\n---\n$body\n")
                 val builder = ProcessBuilder(binary.toString(), "--session", SESSION, "--platform", "ios", flow.toString()).directory(temporary.toFile()).redirectErrorStream(true)
                 builder.environment().clear()
-                builder.environment().putAll(mapOf("PATH" to "/usr/bin:/bin", "HOME" to temporary.toString()) + backend.environment)
+                builder.environment().putAll(mapOf("PATH" to "/usr/bin:/bin", "HOME" to temporary.toString(), "JAVA_HOME" to System.getProperty("java.home")) + backend.environment)
                 val process = builder.start()
                 try {
                     assertTrue(process.waitFor(25, TimeUnit.SECONDS), "CLI did not exit within its deadline")
@@ -284,7 +284,7 @@ class OrchestraIntegrationTest {
             val builder = ProcessBuilder(binary.toString(), "--session", SESSION, "--platform", platform, example.toString())
                 .directory(temporary.toFile()).redirectErrorStream(true)
             builder.environment().clear()
-            builder.environment().putAll(mapOf("PATH" to "/usr/bin:/bin", "HOME" to temporary.toString()) + backend.environment)
+            builder.environment().putAll(mapOf("PATH" to "/usr/bin:/bin", "HOME" to temporary.toString(), "JAVA_HOME" to System.getProperty("java.home")) + backend.environment)
             val process = builder.start()
             try {
                 assertTrue(process.waitFor(25, TimeUnit.SECONDS), "CLI did not exit within its deadline")
