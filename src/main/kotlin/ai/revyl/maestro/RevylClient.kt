@@ -130,7 +130,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         requireAdapter(remainingNanos > 0, "Flow execution timed out. An action may have executed; nothing was retried.")
         val builder = Request.Builder().url("${settings.origin}/api/v1/execution/$path")
             .header("Authorization", "Bearer ${settings.apiKey}")
-            .header("User-Agent", "revyl-maestro/0.1.0-experimental")
+            .header("User-Agent", "revyl-maestro/0.1.0")
             .header("X-Revyl-Agent", "Maestro")
             .header("X-Revyl-Agent-Session-Id", correlationId)
         if (body != null) builder.post(json.writeValueAsBytes(body).toRequestBody("application/json".toMediaType()))

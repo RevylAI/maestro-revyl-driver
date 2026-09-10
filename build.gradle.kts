@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "ai.revyl"
-version = "0.1.0-experimental"
+version = "0.1.0"
 
 repositories { mavenCentral() }
 

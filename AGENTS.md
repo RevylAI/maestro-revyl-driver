@@ -1,6 +1,6 @@
 # Revyl Maestro adapter
 
-This standalone repository owns an experimental Kotlin/JVM Maestro adapter.
+This standalone repository owns a Kotlin/JVM Maestro adapter.
 Revyl services and upstream Maestro are external dependencies. Other repositories'
 agent policies do not automatically apply here.
 
