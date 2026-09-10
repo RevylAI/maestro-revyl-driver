@@ -13,7 +13,6 @@ internal const val MAX_FOCUSED_TEXT_BYTES = 16_384
 internal const val MAX_SWIPE_DURATION_MS = 10_000L
 
 internal enum class WorkerCapability(val field: String) {
-    FOCUSED_TEXT_INPUT("supports_focused_text_input"),
     EXPLICIT_DRAG_DURATION("supports_explicit_drag_duration"),
 }
 

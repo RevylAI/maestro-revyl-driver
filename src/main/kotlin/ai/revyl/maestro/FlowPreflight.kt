@@ -88,11 +88,9 @@ object FlowPreflight {
                     literalClipboardText = command.text
                 }
                 is InputTextCommand -> {
-                    if (platform != "android") unsupported()
                     requireFocusedText(command.text)
                 }
                 is PasteTextCommand -> {
-                    if (platform != "android") unsupported()
                     requireAdapter(clipboardInitialized, "pasteText requires an earlier setClipboard or copyTextFrom command.")
                     literalClipboardText?.let(::requireFocusedText)
                 }
@@ -147,11 +145,14 @@ object FlowPreflight {
 
     internal fun requiredCapabilities(commands: List<MaestroCommand>): Set<WorkerCapability> = commands.mapNotNull {
         when (it.asCommand()) {
-            is InputTextCommand, is PasteTextCommand -> WorkerCapability.FOCUSED_TEXT_INPUT
             is SwipeCommand, is ScrollCommand -> WorkerCapability.EXPLICIT_DRAG_DURATION
             else -> null
         }
     }.toSet()
+
+    internal fun requiresViewerInput(commands: List<MaestroCommand>): Boolean = commands.any {
+        it.asCommand() is InputTextCommand || it.asCommand() is PasteTextCommand
+    }
 
     private fun tapCount(longPress: Boolean?, repeat: maestro.TapRepeat?): Int {
         if (repeat == null) return 1

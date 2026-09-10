@@ -50,6 +50,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
                 client.set(connection)
                 connection.attach(args[1], args[3])
                 connection.verifyCapabilities(FlowPreflight.requiredCapabilities(commands))
+                if (FlowPreflight.requiresViewerInput(commands)) connection.establishViewerInput()
                 val driver = RevylDriver(connection, args[3])
                 try {
                     driver.open()

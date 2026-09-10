@@ -34,12 +34,13 @@ class DeploymentGatedCommandsTest {
     }
 
     private fun advertise(backend: LoopbackBackend) {
-        backend.healthOverrides = mapOf("supports_focused_text_input" to true, "supports_explicit_drag_duration" to true)
+        backend.healthOverrides = mapOf("supports_explicit_drag_duration" to true)
     }
 
-    @Test fun `Android text and local clipboard paste preserve the exact focus-only payload`() {
-        LoopbackBackend().use { backend ->
-            advertise(backend)
+    @ParameterizedTest
+    @ValueSource(strings = ["android", "ios"])
+    fun `text and local clipboard paste preserve the exact viewer input payload`(platform: String) {
+        LoopbackBackend(platform).use { backend ->
             val text = "Montréal 😀\tline\nnext\r"
             val (status, output) = run(backend, """
                 - pressKey: Enter
@@ -51,14 +52,23 @@ class DeploymentGatedCommandsTest {
                 - pasteText
             """.trimIndent())
             assertEquals(0, status, output)
-            assertEquals(listOf("key", "text-input", "text-input", "text-input", "text-input"), backend.mutations.map { it.path.substringAfterLast('/') })
-            assertEquals(listOf(text, "second input", "clipboard value", "Existing name"), backend.mutations.drop(1).map {
-                val payload = json.readTree(it.body)
-                assertEquals(setOf("text"), payload.fieldNames().asSequence().toSet())
-                payload.path("text").textValue()
+            assertEquals(listOf("key"), backend.mutations.map { it.path.substringAfterLast('/') })
+            assertEquals(listOf(text, "second input", "clipboard value", "Existing name"), backend.viewer.messages.map { payload ->
+                assertEquals(setOf("event_type", "action", "action_id", "client_sent_at_ms", "value", "incremental", "skip_tap", "clear_first") + if (platform == "ios") setOf("paste") else emptySet(), payload.fieldNames().asSequence().toSet())
+                assertEquals("STREAM", payload.path("event_type").textValue())
+                assertEquals("MANUAL_INPUT", payload.path("action").textValue())
+                assertTrue(uuidPattern.matches(payload.path("action_id").textValue()))
+                assertTrue(payload.path("client_sent_at_ms").isIntegralNumber)
+                assertTrue(payload.path("client_sent_at_ms").longValue() in (System.currentTimeMillis() - 20_000)..System.currentTimeMillis())
+                assertEquals(true, payload.path("incremental").booleanValue())
+                assertEquals(true, payload.path("skip_tap").booleanValue())
+                assertEquals(false, payload.path("clear_first").booleanValue())
+                if (platform == "ios") assertEquals(true, payload.path("paste").booleanValue())
+                payload.path("value").textValue()
             })
-            assertEquals("/api/v1/execution/device-proxy/$WORKFLOW/health", backend.requests[1].path)
-            assertEquals(1, backend.requests.count { it.path.endsWith("/health") })
+            assertEquals(4, backend.viewer.messages.map { it.path("action_id").textValue() }.toSet().size)
+            assertEquals("/api/v1/execution/streaming/worker-connection/$WORKFLOW", backend.requests[1].path)
+            assertFalse(backend.requests.any { it.path.endsWith("/health") })
             assertTrue(backend.requests.all { it.authorization == "Bearer $FIXTURE_KEY" && it.agent == "Maestro" })
             assertFalse(backend.requests.any { it.path.endsWith("/input") || it.path.endsWith("/tap") })
             assertFalse(output.contains("Montréal"))
@@ -123,7 +133,7 @@ class DeploymentGatedCommandsTest {
             advertise(backend)
             val invalid = json.readTree(overrides).fields().asSequence().associate { it.key to json.treeToValue(it.value, Any::class.java) }
             backend.healthOverrides += invalid
-            assertEquals(1, run(backend, "- pressKey: Home\n- inputText: hello").first)
+            assertEquals(1, run(backend, "- pressKey: Home\n- scroll").first)
             assertTrue(backend.mutations.isEmpty())
         }
     }
@@ -146,11 +156,12 @@ class DeploymentGatedCommandsTest {
 
     @ParameterizedTest
     @ValueSource(strings = ["- inputText: hello", "- setClipboard: hello\n- pasteText", "- copyTextFrom: {id: name}\n- pasteText"])
-    fun `iOS text operations fail preflight even if a worker advertises support`(body: String) {
+    fun `iOS text operations use existing viewer permission instead of a focused capability`(body: String) {
         LoopbackBackend("ios").use { backend ->
-            advertise(backend)
-            assertEquals(1, run(backend, "- pressKey: Home\n$body").first)
-            assertTrue(backend.requests.isEmpty())
+            backend.healthOverrides = mapOf("supports_focused_text_input" to false)
+            assertEquals(0, run(backend, "- pressKey: Home\n$body").first)
+            assertFalse(backend.requests.any { it.path.endsWith("/health") })
+            assertEquals(1, backend.viewer.messages.size)
         }
     }
 
@@ -162,6 +173,8 @@ class DeploymentGatedCommandsTest {
         "- inputText: \"invalid\\ud800text\"", "- inputText: \"invalid\\udc00text\"",
         "- pasteText", "- pasteText\n- setClipboard: later", "- setClipboard: ''\n- pasteText",
         "- setClipboard: \"invalid\\u0000text\"\n- pasteText", "- setClipboard: hello\n- pasteText: {optional: true}",
+        "- setClipboard: hello\n- pasteText: {unknown: true}", "- setClipboard: hello\n- pasteText: {optional: invalid}",
+        "- setClipboard: hello\n- pasteText: {label: '\${1}'}", "- setClipboard: hello\n- pasteText: invalid",
         "- swipe: {direction: UP, duration: 0}", "- swipe: {direction: UP, duration: -1}", "- swipe: {direction: UP, duration: 10001}",
         "- swipe: {direction: UP, duration: 1.5}", "- swipe: {direction: UP, duration: '500'}", "- swipe: {direction: UP, unknown: true}",
         "- swipe: {direction: UP, optional: true}", "- swipe: {direction: UP, optional: invalid}",
@@ -201,23 +214,28 @@ class DeploymentGatedCommandsTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["empty", "oversized", "control", "expression"])
-    fun `dynamic copied text is validated before paste can mutate focus`(kind: String) {
-        LoopbackBackend().use { backend ->
+    @MethodSource("invalidCopiedText")
+    fun `dynamic copied text is validated before paste can mutate focus`(platform: String, kind: String) {
+        LoopbackBackend(platform).use { backend ->
             advertise(backend)
             val copiedText = when (kind) {
                 "empty" -> ""
                 "oversized" -> PRIVATE_SENTINEL.repeat(1000)
-                "control" -> "$PRIVATE_SENTINEL&#127;"
+                "control" -> "$PRIVATE_SENTINEL\u007f"
                 else -> "\${'$PRIVATE_SENTINEL'}"
             }
+            val encodedText = if (platform == "android") copiedText.replace("\u007f", "&#127;") else json.writeValueAsString(copiedText).removeSurrounding("\"")
             backend.intercept = { request ->
-                if (request.path.endsWith("/hierarchy")) Reply(bytes = backend.hierarchy().toString(Charsets.UTF_8).replace("Existing name", copiedText).toByteArray()) else null
+                if (!request.path.endsWith("/hierarchy")) null else {
+                    val hierarchy = backend.hierarchy().toString(Charsets.UTF_8).replace("Existing name", encodedText)
+                    Reply(bytes = (if (platform == "ios" && kind == "empty") hierarchy.replace("\"AXLabel\":\"Name\"", "\"AXLabel\":\"\"") else hierarchy).toByteArray())
+                }
             }
             val (status, output) = run(backend, "- copyTextFrom: {id: name}\n- pasteText\n- pressKey: Home")
             assertEquals(1, status)
             assertTrue(backend.requests.any { it.path.endsWith("/hierarchy") })
             assertTrue(backend.mutations.isEmpty())
+            assertTrue(backend.viewer.messages.isEmpty())
             assertFalse(output.contains(PRIVATE_SENTINEL))
         }
     }
@@ -238,7 +256,7 @@ class DeploymentGatedCommandsTest {
     fun `installed CLI enforces deployment gates and executes only advertised native operations`(platform: String) {
         LoopbackBackend(platform).use { backend ->
             val binary = Path.of("build/install/revyl-maestro/bin/revyl-maestro").toAbsolutePath()
-            val body = (if (platform == "android") "- inputText: '$PRIVATE_SENTINEL'\n- setClipboard: hello\n- pasteText\n" else "") +
+            val body = "- inputText: '$PRIVATE_SENTINEL'\n- setClipboard: hello\n- pasteText\n" +
                 "- swipe: {start: '10, 20', end: '80, 150', duration: 1234}\n- scroll"
             for (advertised in listOf(false, true)) {
                 if (advertised) advertise(backend)
@@ -250,8 +268,9 @@ class DeploymentGatedCommandsTest {
                     assertTrue(process.waitFor(25, TimeUnit.SECONDS), "Installed CLI did not exit within its deadline")
                     val output = process.inputStream.readAllBytes().toString(Charsets.UTF_8)
                     assertEquals(if (advertised) 0 else 1, process.exitValue(), output)
-                    val expected = if (!advertised) emptyList() else (if (platform == "android") listOf("text-input", "text-input") else emptyList()) + listOf("drag", "drag")
+                    val expected = if (!advertised) emptyList() else listOf("drag", "drag")
                     assertEquals(expected, backend.mutations.map { it.path.substringAfterLast('/') })
+                    assertEquals(if (advertised) 2 else 0, backend.viewer.messages.size)
                     assertFalse(output.contains(PRIVATE_SENTINEL))
                     assertFalse(output.contains(FIXTURE_KEY))
                 } finally { process.destroyForcibly() }
@@ -266,18 +285,18 @@ class DeploymentGatedCommandsTest {
             advertise(backend)
             backend.intercept = { request ->
                 if (!request.path.endsWith("/$operation")) null else when (fault) {
-                    "false" -> Reply(bytes = "{\"success\":false,\"action\":\"input\",\"error\":\"$PRIVATE_SENTINEL\"}".toByteArray())
-                    "mismatch" -> Reply(bytes = "{\"success\":true,\"action\":\"text-input\"}".toByteArray())
+                    "false" -> Reply(bytes = "{\"success\":false,\"action\":\"drag\",\"error\":\"$PRIVATE_SENTINEL\"}".toByteArray())
+                    "mismatch" -> Reply(bytes = "{\"success\":true,\"action\":\"swipe\"}".toByteArray())
                     "missing" -> Reply(bytes = "{\"success\":true}".toByteArray())
-                    "string_success" -> Reply(bytes = json.writeValueAsBytes(mapOf("success" to "true", "action" to if (operation == "text-input") "input" else "drag")))
-                    "error" -> Reply(bytes = "{\"success\":true,\"action\":\"${if (operation == "text-input") "input" else "drag"}\",\"error\":\"$PRIVATE_SENTINEL\"}".toByteArray())
+                    "string_success" -> Reply(bytes = json.writeValueAsBytes(mapOf("success" to "true", "action" to "drag")))
+                    "error" -> Reply(bytes = "{\"success\":true,\"action\":\"drag\",\"error\":\"$PRIVATE_SENTINEL\"}".toByteArray())
                     "invalid" -> Reply(bytes = PRIVATE_SENTINEL.toByteArray())
                     "disconnect" -> Reply(bytes = byteArrayOf(), disconnect = true)
                     "timeout" -> Reply(bytes = "{}".toByteArray(), delayMs = 1000)
                     else -> Reply(503, PRIVATE_SENTINEL.toByteArray(), headers = mapOf("Retry-After" to "0"))
                 }
             }
-            val command = if (operation == "text-input") "- setClipboard: hello\n- pasteText" else "- swipe: {direction: UP, duration: 1234}"
+            val command = "- swipe: {direction: UP, duration: 1234}"
             val (status, output) = run(backend, "$command\n- pressKey: Home", backend.environment + ("REVYL_MAESTRO_REQUEST_TIMEOUT_MS" to "500"))
             assertEquals(1, status)
             assertEquals(listOf("/api/v1/execution/device-proxy/$WORKFLOW/$operation"), backend.mutations.map { it.path })
@@ -326,16 +345,18 @@ class DeploymentGatedCommandsTest {
     }
 
     companion object {
+        @JvmStatic fun invalidCopiedText(): Stream<Arguments> = listOf("android", "ios").flatMap { platform ->
+            listOf("empty", "oversized", "control", "expression").map { Arguments.of(platform, it) }
+        }.stream()
+
         @JvmStatic fun missingCapabilities(): Stream<Arguments> = listOf(
-            "- inputText: hello" to "supports_focused_text_input",
-            "- setClipboard: hello\n- pasteText" to "supports_focused_text_input",
             "- swipe: {direction: UP}" to "supports_explicit_drag_duration",
             "- scroll" to "supports_explicit_drag_duration",
         ).flatMap { (command, field) ->
             listOf("missing", "false", "null", "1", "\"true\"", "[]", "{}").map { Arguments.of(command, field, it) }
         }.stream()
 
-        @JvmStatic fun uncertainOperations(): Stream<Arguments> = listOf("text-input", "drag").flatMap { operation ->
+        @JvmStatic fun uncertainOperations(): Stream<Arguments> = listOf("drag").flatMap { operation ->
             listOf("false", "mismatch", "missing", "string_success", "error", "invalid", "disconnect", "timeout", "http").map { Arguments.of(operation, it) }
         }.stream()
     }

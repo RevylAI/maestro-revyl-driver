@@ -43,6 +43,14 @@ internal object FlowSourceOptions {
                             options.get("label")?.let { if (!it.isTextual || it.textValue().contains("\${")) unsupported() }
                         } else requireAdapter(options.isTextual, "inputText requires literal text.")
                     }
+                    "pasteText" -> {
+                        requireAdapter(options.isNull || options.isObject, "pasteText accepts only supported command options.")
+                        if (options.isObject) {
+                            if (options.fieldNames().asSequence().any { it !in setOf("label", "optional") }) unsupported()
+                            options.get("optional")?.let { if (!it.isBoolean || it.booleanValue()) unsupported() }
+                            options.get("label")?.let { if (!it.isTextual || it.textValue().contains("\${")) unsupported() }
+                        }
+                    }
                     "swipe" -> {
                         requireAdapter(options.isObject, "Swipe requires explicit options.")
                         if (options.fieldNames().asSequence().any { it !in setOf("start", "end", "direction", "from", "duration", "label", "optional", "waitToSettleTimeoutMs") }) unsupported()

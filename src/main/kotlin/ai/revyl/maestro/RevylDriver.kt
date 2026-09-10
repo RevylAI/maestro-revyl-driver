@@ -201,9 +201,8 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         client.act("back", emptyMap())
     }
     override fun inputText(text: String) = client.guard {
-        if (platform != "android") unsupported()
         requireFocusedText(text)
-        client.act("text-input", mapOf("text" to text))
+        client.inputText(text, platform)
     }
     override fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean) = client.guard {
         requirePlainLink(link, autoVerify, browser)
