@@ -18,7 +18,7 @@ agent policies do not automatically apply here.
 - Test through real Maestro YAML and Orchestra against loopback fixtures. Passing
   offline tests does not establish real-device or cloud compatibility.
 - Keep dependency selection and licensing notes explicit. Update Gradle lockfiles
-  through Gradle, not by hand. Run the README's check and install commands before
-  handing off changes and keep its capability claims aligned with the code.
+  through Gradle, not by hand. Run `./gradlew --no-daemon clean check installDist`
+  before handing off changes and keep README capability claims aligned with the code.
 - Remote repository creation, publication, commits, pushes, and live-device or
   cloud operations require separate explicit authorization.
