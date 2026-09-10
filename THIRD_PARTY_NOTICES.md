@@ -1,9 +1,14 @@
 # Third-party dependencies and notices
 
-This is a private experiment, not a redistribution clearance or exhaustive
-license inventory. Revyl's source remains UNLICENSED; `LICENSE` does not replace
-third-party licenses. Review the full resolved graph and bundled JAR notices
-before any publication or distribution.
+Revyl's adapter source is licensed under the Apache License 2.0 in `LICENSE`.
+Third-party components retain their own licenses and notices. The only vendored
+third-party files are the official Gradle wrapper scripts and JAR described below;
+their existing copyright and license notices are retained. Maven dependencies are
+resolved at build time and are not included in this source repository.
+
+This file records source provenance and dependency selection, not an exhaustive
+binary-distribution license inventory. Before distributing a built runtime,
+review the complete resolved artifact graph and preserve its licenses and notices.
 
 ## Maestro
 
@@ -26,7 +31,7 @@ Gradle 8.13 and verifies the distribution SHA-256 published by Gradle.
 - License text: `licenses/Apache-2.0.txt`
 - Gradle licensing: https://github.com/gradle/gradle/blob/v8.13.0/LICENSE
 
-## GraalJS and other libraries
+## GraalJS and other build-time-resolved dependencies
 
 Maestro's default `org.graalvm.js:js:24.2.0` dependency selects Oracle's
 `truffle-enterprise` runtime, which is subject to the GraalVM Free Terms and
