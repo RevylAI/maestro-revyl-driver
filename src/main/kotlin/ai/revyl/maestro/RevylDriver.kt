@@ -24,7 +24,7 @@ import javax.imageio.ImageIO
 class RevylDriver(private val client: RevylClient, private val platform: String) : Driver {
     private var closed = false
 
-    override fun name(): String = "Revyl (experimental native subset)"
+    override fun name(): String = "Revyl (native subset)"
     override fun open() { requireAdapter(!closed, "The local Revyl driver is closed.") }
     override fun close() { closed = true; client.close() }
     override fun isShutdown(): Boolean = closed

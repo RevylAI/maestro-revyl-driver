@@ -174,6 +174,27 @@ class BoundaryTest {
         assertEquals("Revyl returned an invalid native hierarchy.", failure.message)
     }
 
+    @Test fun `android hierarchy accepts one exact UIAutomator footer at the document boundary`() {
+        val xml = "<hierarchy><node bounds='[0,0][1,1]'/></hierarchy>"
+        val footer = "UI hierchary dumped to: /dev/tty"
+        for (suffix in listOf(footer + "\n", "\n" + footer + "\n")) {
+            val hierarchy = NativeHierarchy.parse((xml + suffix).toByteArray(), "android")
+            assertEquals(1, hierarchy.root.children.size)
+        }
+    }
+
+    @Test fun `android hierarchy rejects arbitrary malformed and repeated trailing content`() {
+        val valid = "<hierarchy><node bounds='[0,0][1,1]'/></hierarchy>"
+        val footer = "UI hierchary dumped to: /dev/tty"
+        for (body in listOf(
+            valid + "\narbitrary trailing data\n",
+            "<hierarchy><node bounds='[0,0][1,1]'></hierarchy>" + footer + "\n",
+            valid + "\n" + footer + "\n" + footer + "\n",
+        )) {
+            assertFailsWith<AdapterFailure> { NativeHierarchy.parse(body.toByteArray(), "android") }
+        }
+    }
+
     @Test fun `PNG corruption truncation chunks and pixel bombs fail closed`() {
         val valid = png(100, 200)
         val variants = listOf(
