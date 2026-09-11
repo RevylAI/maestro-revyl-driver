@@ -197,6 +197,10 @@ stop only a session you own:
 revyl device stop --session-id YOUR_RUNNING_SESSION_UUID
 ```
 
-Private source, not licensed for redistribution. See [LICENSE](LICENSE) and
-[third-party notices](THIRD_PARTY_NOTICES.md). Contributor boundaries and validation
-requirements are maintained in [AGENTS.md](AGENTS.md).
+## License
+
+Copyright (c) 2026 Revyl. Licensed under the [Apache License 2.0](LICENSE).
+Third-party components retain their own licenses; see the
+[third-party notices](THIRD_PARTY_NOTICES.md). This repository publishes source,
+not a prebuilt distribution of the resolved dependencies. Contributor boundaries
+and validation requirements are maintained in [AGENTS.md](AGENTS.md).
