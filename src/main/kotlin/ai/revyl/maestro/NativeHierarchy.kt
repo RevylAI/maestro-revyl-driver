@@ -90,7 +90,7 @@ private class HierarchyParser {
             val bounds = Regex("\\[(-?\\d+),(-?\\d+)\\]\\[(-?\\d+),(-?\\d+)\\]")
                 .matchEntire(element.getAttribute("bounds"))?.groupValues?.drop(1)?.map { it.toInt() }
                 ?: throw AdapterFailure("Missing native bounds.")
-            requireAdapter(bounds[2] >= bounds[0] && bounds[3] >= bounds[1] && bounds.all { it in -100_000..100_000 }, "Invalid native bounds.")
+            requireAdapter(bounds.all { it in -100_000..100_000 }, "Invalid native bounds.")
             fun state(name: String): Boolean? {
                 if (!element.hasAttribute(name)) return null
                 return element.getAttribute(name).toBooleanStrictOrNull() ?: throw AdapterFailure("Invalid native state.")
@@ -99,7 +99,8 @@ private class HierarchyParser {
             for ((source, target) in listOf("text" to "text", "resource-id" to "resource-id", "content-desc" to "accessibilityText", "class" to "class", "hint" to "hintText")) {
                 if (element.hasAttribute(source)) attributes[target] = element.getAttribute(source)
             }
-            add(TreeNode(attributes, androidChildren(element, depth + 1), state("clickable"), state("enabled"), state("focused"), state("checked"), state("selected")))
+            val node = TreeNode(attributes, androidChildren(element, depth + 1), state("clickable"), state("enabled"), state("focused"), state("checked"), state("selected"))
+            if (bounds[2] > bounds[0] && bounds[3] > bounds[1]) add(node) else addAll(node.children)
         }
     }
 

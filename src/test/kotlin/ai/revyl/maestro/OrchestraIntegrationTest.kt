@@ -28,6 +28,32 @@ class OrchestraIntegrationTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = ["[0,220][100,200]", "[110,0][100,200]", "[0,20][100,20]"])
+    fun `clipped Android nodes cannot match visible assertions while descendants remain targetable`(bounds: String) {
+        val hierarchy = """
+            <hierarchy><node bounds="[0,0][100,200]">
+              <node bounds="[10,10][90,40]" text="Healthy"/>
+              <node bounds="$bounds" text="Clipped" resource-id="clipped" clickable="true">
+                <node bounds="[10,80][90,120]" text="Descendant" clickable="true"/>
+              </node>
+            </node></hierarchy>
+        """.trimIndent().toByteArray()
+        LoopbackBackend().use { backend ->
+            backend.intercept = { if (it.path.endsWith("/hierarchy")) Reply(bytes = hierarchy) else null }
+            val (status, output) = run(backend, "- assertVisible: Healthy\n- assertNotVisible: Clipped\n- tapOn: Descendant")
+            assertEquals(0, status, output)
+            assertEquals(1, backend.mutations.size)
+            assertEquals(json.readTree("{\"x\":50,\"y\":100}"), json.readTree(backend.mutations.single().body))
+        }
+        LoopbackBackend().use { backend ->
+            backend.intercept = { if (it.path.endsWith("/hierarchy")) Reply(bytes = hierarchy) else null }
+            val (status, output) = run(backend, "- extendedWaitUntil: {visible: {id: clipped}, timeout: 100}\n- tapOn: Healthy")
+            assertEquals(1, status, output)
+            assertTrue(backend.mutations.isEmpty())
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = ["android", "ios"])
     fun `real YAML and Orchestra execute native assertions one tap and private screenshot`(platform: String) {
         LoopbackBackend(platform).use { backend ->
@@ -115,7 +141,7 @@ class OrchestraIntegrationTest {
         "- assertVisible: {text: Missing, optional: true}",
         "- retry: {maxRetries: 2, commands: [{tapOn: Continue}]}",
         "- repeat: {times: 2, commands: [{tapOn: Continue}]}",
-        "- runFlow: {commands: [{tapOn: Continue}]}",
+        "- runFlow: {when: {true: 'true'}, commands: [{tapOn: Continue}]}",
         "- evalScript: \"\${1 + 1}\"",
         "- assertTrue: \"\${true}\"",
         "- tapOn: {text: '\${1 + 1}'}",
@@ -145,7 +171,7 @@ class OrchestraIntegrationTest {
     @ValueSource(strings = [
         "onFlowStart: [{tapOn: Continue}]",
         "onFlowComplete: [{inputText: secret}]",
-        "env: {REVYL_API_KEY: secret}",
+        "env: {VALUE: '\${REVYL_API_KEY}'}",
         "androidWebViewHierarchy: devtools",
         "properties: {foo: bar}",
         "apiKey: secret",
@@ -167,11 +193,11 @@ class OrchestraIntegrationTest {
         }
     }
 
-    @Test fun `existing nested flow and script files are rejected before attachment`() {
+    @Test fun `existing scripts directly or in nested flows are rejected before attachment`() {
         val script = temporary.resolve("script.js")
         val nested = temporary.resolve("nested.yaml")
         Files.writeString(script, "throw new Error('$PRIVATE_SENTINEL')")
-        Files.writeString(nested, "appId: com.example\n---\n- tapOn: Continue\n- inputText: secret\n")
+        Files.writeString(nested, "appId: com.example\n---\n- tapOn: Continue\n- runScript: ${script.toAbsolutePath()}\n")
         for (command in listOf("runScript: ${script.toAbsolutePath()}", "runFlow: ${nested.toAbsolutePath()}")) {
             LoopbackBackend().use { backend ->
                 val (status, output) = run(backend, "- tapOn: Continue\n- $command")

@@ -64,6 +64,7 @@ limitations below before relying on the result.
 | `eraseText` | Sends 1–100 Backspaces to current focus. Omitted count means 50 Backspaces, not a guarantee that the field is empty. |
 | `inputText`, `pasteText` | Android and iOS input through the existing viewer control WebSocket. Requires a ready, authorized control connection before any flow mutation. See the accepted legacy input limitations below. |
 | `setClipboard`, `copyTextFrom` | Store text only in Maestro's local clipboard variable; these commands do not set the OS clipboard. Literal `setClipboard` text is limited to 16 KiB UTF-8. `pasteText` requires an earlier clipboard command and uses the viewer input path below. |
+| `runFlow` | File-based or inline subflows, optionally gated by native visible/notVisible/platform conditions and parameterized with scoped `env` strings. Nested commands must belong to this same supported subset; see the limits below. |
 | `setLocation` | Finite latitude in −90…90 and longitude in −180…180 degrees. Supported by the current Android emulator/iOS simulator worker paths, not physical iOS. |
 | `setDarkMode` | Explicit `enabled` or `disabled` through system appearance setting. Current worker support is emulator/simulator-only; toggles and appearance assertions are unsupported. |
 | `openLink` | Plain absolute HTTP(S) or app-scheme links, with `autoVerify: false` and `browser: false` (also the scalar form's defaults). Uses system URL routing without forcing a target app. URLs are limited to 8 KiB UTF-8; relative, control-character, embedded-credential, `file:`, `data:`, `javascript:`, and `intent:` links are rejected. |
@@ -79,11 +80,139 @@ appId: com.example.app
 - longPressOn: Continue
 ```
 
-The complete flow is checked before attachment. There may be at most 999 source
-commands and 1000 expanded commands, counting each tap or Backspace in a sequence.
-Optional commands, scripts/expressions, hooks, general repeat/retry blocks,
+The complete flow, including every nested command, is checked before attachment.
+There may be at most 999 source commands and 1000 expanded commands across the
+whole invocation, counting each `runFlow` wrapper and each tap or Backspace in a
+sequence. Referencing a file twice counts its commands twice; configurations do
+not count as commands.
+Optional commands, scripts/arbitrary expressions, hooks, general repeat/retry blocks,
 `retryTapIfNoChange`, and `waitUntilVisible` are rejected. Unsupported or invalid
 options are not a request to approximate the action.
+
+Android UIAutomator nodes with inverted or zero-area rectangles have no visible
+target and are omitted, not normalized into tappable bounds. Their valid
+descendants remain in order under the nearest retained ancestor; selectors cannot
+match the omitted node itself. Malformed coordinates, invalid states, and hierarchy
+size/depth violations still fail the flow.
+
+## Subflows, conditions, and parameters
+
+Reuse existing supported login/onboarding steps without manually flattening them:
+
+```yaml
+appId: com.example.app
+---
+- runFlow: steps/onboarding.yaml
+- runFlow:
+    file: steps/check-profile.yaml
+    label: Check profile
+- runFlow:
+    commands:
+      - assertVisible: Welcome
+      - pressKey: Home
+```
+
+Referenced files use the normal Maestro `appId` configuration and command-list
+format. Inline command lists inherit their containing flow's context and have no
+separate configuration. Relative paths resolve beside the containing YAML file,
+including file references inside inline flows; absolute paths are also accepted.
+Maestro retains execution order and file-specific app IDs. Its local clipboard
+state is shared across parent, child, and sibling flows.
+
+Use exactly one nonempty literal file path or nonempty inline `commands` list;
+an optional `label`, `env`, and `when` are allowed. `optional` (even false), unknown
+options, scripts, hooks, and retry/repeat blocks are rejected. Nesting is limited to 16 `runFlow` levels,
+each file to 1 MiB, and aggregate YAML size across file references to 8 MiB
+(counting repeated references). Cycles,
+including symlink aliases, missing files, invalid nested commands, and unsupported
+source options fail before any backend request. These are trusted local files;
+do not edit them while a run is being parsed.
+
+Nested gestures contribute to the same pre-mutation capability gate; nested input
+requires the same up-front viewer connection. Nested screenshots use the same
+private `.revyl-maestro/` directory and simple-name restrictions, and names must
+be unique across the invocation and not overwrite existing artifacts. A nested
+failure is terminal: no later child or parent action and no adapter replay.
+
+`when` accepts `visible`, `notVisible`, and/or a literal `platform: android|ios`.
+Combined conditions use Maestro's native AND semantics and lookup waits. False
+conditions skip the subflow without failing its parent; transport failures remain
+terminal, not skips. `when.true`, JavaScript conditions, optional selectors, and
+empty conditions are unsupported. Condition selectors are resolved in the enclosing
+scope, **before** the subflow's own `env` is applied.
+
+```yaml
+appId: com.example.app
+env:
+  PROFILE_LABEL: Profile
+  DISPLAY_NAME: Demo user
+---
+- runFlow:
+    when:
+      visible: ${PROFILE_LABEL}
+      platform: android
+    env:
+      NAME: ${DISPLAY_NAME}
+    commands:
+      - inputText: ${NAME}
+      - assertVisible: ${NAME}
+```
+
+Only `${NAME}` references and their concatenation with literal text are accepted,
+using explicitly declared YAML string parameters. Names must match
+`[A-Z][A-Z0-9_]{0,63}`; `JSON` is reserved. Shell variables, API credentials,
+Maestro runtime objects, copied-text expressions, Java/HTTP access, JavaScript
+operators/functions, escaped expressions, and undeclared references are not
+available. Do not put secrets in flows or use them through the legacy viewer input
+channel. Each `env` map has at most 64 entries, each value at most 16 KiB UTF-8;
+the invocation permits at most 4096 parameter definitions and 1 MiB of resolved
+parameter values, counting repeated definitions. Interpolation is bounded to
+16384 references and 8 MiB of substituted text across the invocation.
+
+Maestro's published parser emits variable definitions; its native Graal engine
+resolves their strings through an identifier-only guard **before attachment**.
+Every resolved command, including skipped branches, must pass the same validation
+as literal commands. Orchestra still evaluates native conditions and executes the
+validated command tree. String fields supported by Maestro's native interpolation
+(such as input text, selectors, app IDs, screenshot names, links, and string
+timeouts) can reference parameters. File paths and parser-time typed options
+(such as key names, counts, duration, boolean flags, and platform) remain literal.
+No second YAML or expression interpreter is used.
+
+Scope and precedence follow the pinned Maestro 2.10 runtime, including its quirks:
+subflows inherit enclosing parameters and restore them on return; file-level
+`env` definitions override caller `runFlow.env` values with the same name. Values
+within one env map resolve together against the prior scope, not sibling entries.
+For inline flows, this parser emits the `runFlow.env` definition once per inline
+command, then Orchestra applies all definitions before executing the body. Avoid
+self-referential overrides such as `NAME: ${NAME}-suffix` in multi-command inline
+flows: the suffix is applied repeatedly. Use a distinct source parameter name.
+
+Clipboard initialization and text validity must hold on **every** possible path
+before a later `pasteText`. Initialization inside a conditional branch is sufficient
+for a paste inside that branch, but cannot establish initialization after it. All
+branches contribute to command budgets, screenshot reservations, viewer setup,
+and capability checks even when their conditions would skip execution.
+
+Live staging checks of unconditional flows on an Android emulator and iOS simulator verified nested
+file and inline flows, native Settings navigation and assertions, nested
+screenshots, rejection of unsupported child commands before preceding actions,
+and stopping child and parent continuation after a failed child assertion.
+Loopback real-parser/Orchestra tests cover the broader boundary cases; these live
+checks do not establish customer-app, nested text-input, or gesture compatibility.
+Additional live Settings flows on staging Android and iOS verified combined
+visible/not-visible/platform conditions, skipped branches, nested string parameters,
+file-level precedence, scope restoration, parameterized selectors and screenshots,
+and rejection of invalid resolved paths and undeclared process-credential references
+before preceding actions. The negative checks independently asserted unchanged
+device state afterward. Other condition and parameter boundaries have loopback coverage.
+The intended outcome is reusable supported conditional, parameterized onboarding/login flows without
+flattening. The primary metric is the
+completion rate of supported nested-flow invocations, expected to increase;
+runner exit status and native assertions measure completion. Guardrails are zero
+backend requests for invalid flows, no replay after uncertain outcomes, and bounded
+execution. No baseline, new content analytics, or broader Maestro compatibility
+is claimed. Existing viewer-input restrictions on secrets still apply.
 
 ## Existing viewer input: accepted limitations
 
