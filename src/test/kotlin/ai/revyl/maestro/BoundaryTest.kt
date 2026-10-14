@@ -168,10 +168,57 @@ class BoundaryTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["<!DOCTYPE hierarchy [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><hierarchy>&x;</hierarchy>", "<bad/>", "<hierarchy><node bounds='[1,1][0,0]'/></hierarchy>", "<hierarchy><node bounds='[0,0][1,1]' enabled='maybe'/></hierarchy>"])
+    @ValueSource(strings = ["<!DOCTYPE hierarchy [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><hierarchy>&x;</hierarchy>", "<bad/>", "<hierarchy><node bounds='[0,0][100001,1]'/></hierarchy>", "<hierarchy><node bounds='[0,0][1,1]' enabled='maybe'/></hierarchy>"])
     fun `malformed XML entities geometry and states are rejected safely`(body: String) {
         val failure = assertFailsWith<AdapterFailure> { NativeHierarchy.parse(body.toByteArray(), "android") }
         assertEquals("Revyl returned an invalid native hierarchy.", failure.message)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["[0,220][100,200]", "[110,0][100,200]", "[110,220][100,200]", "[0,0][0,200]", "[0,20][100,20]", "[0,0][0,0]"])
+    fun `android nonpositive rectangles lose their own selectors but retain valid descendants in order`(bounds: String) {
+        val xml = """
+            <hierarchy><node bounds="[0,0][100,200]" resource-id="root">
+              <node bounds="[0,0][20,20]" resource-id="before"/>
+              <node bounds="$bounds" text="Clipped" resource-id="clipped" clickable="true" enabled="true">
+                <node bounds="[0,30][20,50]" resource-id="descendant"/>
+              </node>
+              <node bounds="$bounds" text="Clipped leaf" clickable="true"/>
+              <node bounds="[0,60][20,80]" resource-id="after"/>
+            </node></hierarchy>
+        """.trimIndent()
+        val root = NativeHierarchy.parse(xml.toByteArray(), "android").root.children.single()
+        assertEquals(listOf("before", "descendant", "after"), root.children.map { it.attributes["resource-id"] })
+        assertEquals("[0,30][20,50]", root.children[1].attributes["bounds"])
+        assertTrue(root.aggregate().none { it.attributes["text"]?.startsWith("Clipped") == true })
+    }
+
+    @Test fun `android all-clipped hierarchy is empty rather than a phantom visible node`() {
+        val hierarchy = NativeHierarchy.parse("<hierarchy><node bounds='[0,220][100,200]' text='Clipped'/></hierarchy>".toByteArray(), "android")
+        assertTrue(hierarchy.root.children.isEmpty())
+    }
+
+    @Test fun `android positive-area bounds are preserved without coordinate clamping`() {
+        val hierarchy = NativeHierarchy.parse("<hierarchy><node bounds='[-5,-5][20,20]' text='Partial'/></hierarchy>".toByteArray(), "android")
+        assertEquals("[-5,-5][20,20]", hierarchy.root.children.single().attributes["bounds"])
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = [
+        "<node bounds='[0,220][100,200]' enabled='maybe'/>",
+        "<node bounds='[0,220][100,200]'><node bounds='invalid'/></node>",
+        "<node bounds='[0,100001][100,200]'/>",
+        "<node bounds='[0,2147483648][100,200]'/>",
+    ])
+    fun `clipped nodes do not bypass state coordinate or descendant validation`(node: String) {
+        assertFailsWith<AdapterFailure> { NativeHierarchy.parse("<hierarchy>$node</hierarchy>".toByteArray(), "android") }
+    }
+
+    @Test fun `clipped nodes still consume hierarchy depth and count budgets`() {
+        val node = "<node bounds='[0,220][100,200]'>"
+        for (xml in listOf("<hierarchy>" + node.repeat(102) + "</node>".repeat(102) + "</hierarchy>", "<hierarchy>" + "<node bounds='[0,220][100,200]'/>".repeat(10_001) + "</hierarchy>")) {
+            assertFailsWith<AdapterFailure> { NativeHierarchy.parse(xml.toByteArray(), "android") }
+        }
     }
 
     @Test fun `android hierarchy accepts one exact UIAutomator footer at the document boundary`() {

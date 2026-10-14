@@ -44,6 +44,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
         val settings = ConnectionSettings.fromEnvironment(environment)
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(flowTimeout)
         val future = executor.submit<Boolean> {
+            FlowSourceOptions.validate(flow)
             val commands = FlowPreflight.validate(YamlCommandReader.readCommands(flow), args[3])
             FlowPreflight.prepareScreenshotDirectory(commands)
             RevylClient(settings, deadline).use { connection ->
