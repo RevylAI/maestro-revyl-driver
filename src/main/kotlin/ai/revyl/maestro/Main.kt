@@ -18,7 +18,7 @@ import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.exitProcess
 
-private const val USAGE = "Usage: revyl-maestro --session UUID --platform android|ios flow.yaml"
+private const val USAGE = "Usage: revyl-maestro --session UUID --platform android|ios flow.yaml\n       revyl-maestro --validate-only --platform android|ios flow.yaml"
 
 fun main(args: Array<String>) {
     exitProcess(runCli(args, System.getenv(), System.out, System.err))
@@ -32,6 +32,18 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
     val client = AtomicReference<RevylClient?>()
     val executor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "revyl-maestro-flow").apply { isDaemon = true } }
     try {
+        if (args.firstOrNull() == "--validate-only") {
+            requireAdapter(args.size == 4 && args[1] == "--platform" && args[2] in setOf("android", "ios"), USAGE)
+            val flow = Path.of(args[3])
+            requireAdapter(Files.isRegularFile(flow) && Files.size(flow) <= 1024 * 1024, "Flow must be a regular file no larger than 1 MiB.")
+            FlowSourceOptions.validate(flow)
+            val commands = try { FlowPreflight.validate(YamlCommandReader.readCommands(flow), args[2]) } catch (failure: AdapterFailure) {
+                throw AdapterFailure("${failure.message} Rejected command: ${FlowPreflight.rejectedCommand ?: "flow source"}.")
+            }
+            val capabilities = FlowPreflight.requiredCapabilities(commands, args[2]).map { it.field }.sorted()
+            output.println("Flow is within the supported subset. Required worker capabilities: ${capabilities.ifEmpty { listOf("none") }.joinToString()}")
+            return 0
+        }
         requireAdapter(args.size == 5 && args[0] == "--session" && args[2] == "--platform", USAGE)
         requireAdapter(uuidPattern.matches(args[1]), "Session must be a canonical UUID.")
         requireAdapter(args[3] in setOf("android", "ios"), "Platform must be android or ios.")
@@ -50,7 +62,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
             RevylClient(settings, deadline).use { connection ->
                 client.set(connection)
                 connection.attach(args[1], args[3])
-                connection.verifyCapabilities(FlowPreflight.requiredCapabilities(commands))
+                connection.verifyCapabilities(FlowPreflight.requiredCapabilities(commands, args[3]))
                 if (FlowPreflight.requiresViewerInput(commands)) connection.establishViewerInput()
                 val driver = RevylDriver(connection, args[3])
                 try {

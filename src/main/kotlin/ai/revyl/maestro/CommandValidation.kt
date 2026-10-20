@@ -16,6 +16,49 @@ internal const val MAX_SWIPE_DURATION_MS = 10_000L
 
 internal enum class WorkerCapability(val field: String) {
     EXPLICIT_DRAG_DURATION("supports_explicit_drag_duration"),
+    APP_LIFECYCLE("supports_app_lifecycle"),
+    PRECISE_ORIENTATION("supports_precise_orientation"),
+}
+
+internal const val MAX_LAUNCH_ARGUMENTS = 64
+internal const val MAX_LAUNCH_ARGUMENT_VALUE_BYTES = 4_096
+
+private val launchArgumentKeyPattern = Regex("[A-Za-z0-9_.-]{1,128}")
+private val permissionValues = setOf("allow", "deny", "unset")
+private val sharedPermissions = setOf("all", "calendar", "camera", "contacts", "location", "microphone", "notifications", "photos")
+private val platformPermissions = mapOf(
+    "android" to sharedPermissions + setOf("bluetooth", "phone", "sms", "storage"),
+    "ios" to sharedPermissions + setOf("health", "homekit", "medialibrary", "motion", "reminders", "siri", "speech", "userTracking"),
+)
+
+internal fun requireAppId(appId: String) {
+    requireAdapter(appIdPattern.matches(appId), "Use a literal native app ID.")
+}
+
+private val androidPermissionPattern = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*\\.permission\\.[A-Z][A-Z0-9_]{0,127}")
+
+internal fun requirePermissions(permissions: Map<String, String>, platform: String) {
+    val names = platformPermissions.getValue(platform)
+    permissions.forEach { (name, value) ->
+        requireAdapter(name in names || (platform == "android" && androidPermissionPattern.matches(name)), "Unsupported permission name for this platform.")
+        requireAdapter(value in permissionValues, "Permission values must be allow, deny, or unset.")
+    }
+}
+
+internal fun requireLaunchArguments(arguments: Map<String, Any>) {
+    requireAdapter(arguments.size in 1..MAX_LAUNCH_ARGUMENTS, "Launch arguments must contain 1 to 64 entries.")
+    arguments.forEach { (key, value) ->
+        requireAdapter(launchArgumentKeyPattern.matches(key), "Launch argument names must be 1 to 128 letters, digits, dots, dashes, or underscores.")
+        when (value) {
+            is String -> {
+                if (value.contains("\${")) unsupported()
+                requireAdapter(value.toByteArray(Charsets.UTF_8).size <= MAX_LAUNCH_ARGUMENT_VALUE_BYTES && value.none { it.isISOControl() }, "Launch argument values must be at most 4 KiB without control characters.")
+            }
+            is Boolean, is Int, is Long -> Unit
+            is Double -> requireAdapter(value.isFinite(), "Launch argument numbers must be finite.")
+            else -> unsupported()
+        }
+    }
 }
 
 internal fun requireFocusedText(text: String) {

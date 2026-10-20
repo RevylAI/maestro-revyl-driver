@@ -121,10 +121,7 @@ class OrchestraIntegrationTest {
     @ParameterizedTest
     @ValueSource(strings = [
         "- inputText: ''",
-        "- stopApp",
         "- killApp",
-        "- clearState",
-        "- clearKeychain",
         "- scrollUntilVisible: {element: {text: Continue}}",
         "- swipe: {direction: UP, duration: 0}",
         "- hideKeyboard",
@@ -147,15 +144,8 @@ class OrchestraIntegrationTest {
         "- tapOn: {text: '\${1 + 1}'}",
         "- takeScreenshot: ../escape",
         "- takeScreenshot: {path: smoke, cropOn: {text: Continue}}",
-        "- launchApp",
-        "- launchApp: {stopApp: false}",
-        "- launchApp: {stopApp: false, permissions: {all: allow}}",
-        "- launchApp: {stopApp: false, permissions: {}, clearState: true}",
-        "- launchApp: {stopApp: false, permissions: {}, clearState: false}",
-        "- launchApp: {stopApp: false, permissions: {}, clearKeychain: true}",
         "- launchApp: {stopApp: false, permissions: {}, launchArguments: {name: value}}",
         "- launchApp: {stopApp: false, permissions: {}, launchArguments: {}}",
-        "- setPermissions: {permissions: {all: allow}}",
         "- setLocation: {latitude: 91, longitude: 2}",
         "- takeScreenshot: '\${1 + 1}'",
     ])

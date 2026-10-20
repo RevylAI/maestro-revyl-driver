@@ -49,14 +49,18 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         NativeHierarchy.parse(client.read("hierarchy"), platform).root
     }
 
-    override fun launchApp(appId: String, launchArguments: Map<String, Any>) {
+    override fun launchApp(appId: String, launchArguments: Map<String, Any>) = client.guard {
         requireAdapter(appIdPattern.matches(appId), "Launch requires a native bundle or package ID.")
-        if (launchArguments.isNotEmpty()) unsupported()
-        client.act("launch", mapOf("bundle_id" to appId))
+        if (launchArguments.isEmpty()) return@guard client.act("launch", mapOf("bundle_id" to appId))
+        requireLaunchArguments(launchArguments)
+        client.act("launch", mapOf("bundle_id" to appId, "arguments" to launchArguments))
     }
 
-    override fun setPermissions(appId: String, permissions: Map<String, String>) {
-        if (permissions.isNotEmpty()) unsupported()
+    override fun setPermissions(appId: String, permissions: Map<String, String>) = client.guard {
+        if (permissions.isEmpty()) return@guard
+        requireAppId(appId)
+        requirePermissions(permissions, platform)
+        client.act("set_permissions", mapOf("bundle_id" to appId, "permissions" to permissions))
     }
 
     override fun setAndroidChromeDevToolsEnabled(enabled: Boolean) {
@@ -144,10 +148,24 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         return null
     }
 
-    override fun stopApp(appId: String): Nothing = unsupported()
-    override fun killApp(appId: String): Nothing = unsupported()
-    override fun clearAppState(appId: String): Nothing = unsupported()
-    override fun clearKeychain(): Nothing = unsupported()
+    override fun stopApp(appId: String) = client.guard {
+        requireAppId(appId)
+        client.act("kill_app", mapOf("bundle_id" to appId))
+    }
+
+    override fun killApp(appId: String) = client.guard {
+        if (platform == "android") unsupported()
+        stopApp(appId)
+    }
+
+    override fun clearAppState(appId: String) = client.guard {
+        requireAppId(appId)
+        client.act("clear_app_state", mapOf("bundle_id" to appId))
+    }
+
+    override fun clearKeychain() = client.guard {
+        if (platform == "ios") client.act("clear_keychain", emptyMap())
+    }
     override fun longPress(point: Point) = client.guard {
         val info = deviceInfo()
         requireAdapter(point.x in 0 until info.widthGrid && point.y in 0 until info.heightGrid, "Long-press coordinates must be inside the native viewport.")
@@ -214,7 +232,15 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         requireLocation(latitude, longitude)
         client.act("set_location", mapOf("latitude" to latitude, "longitude" to longitude))
     }
-    override fun setOrientation(orientation: DeviceOrientation): Nothing = unsupported()
+    override fun setOrientation(orientation: DeviceOrientation) = client.guard {
+        val value = when (orientation) {
+            DeviceOrientation.PORTRAIT -> "portrait"
+            DeviceOrientation.LANDSCAPE_LEFT -> "landscape_left"
+            DeviceOrientation.LANDSCAPE_RIGHT -> "landscape_right"
+            DeviceOrientation.UPSIDE_DOWN -> "upside_down"
+        }
+        client.act("set_orientation", mapOf("orientation" to value))
+    }
     override fun eraseText(charactersToErase: Int) = client.guard {
         requireAdapter(charactersToErase in 1..MAX_ERASE_CHARACTERS, "Erase count must be an integer from 1 to 100.")
         repeat(charactersToErase) { pressKey(KeyCode.BACKSPACE) }

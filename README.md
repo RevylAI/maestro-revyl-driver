@@ -66,6 +66,7 @@ limitations below before relying on the result.
 | `setClipboard`, `copyTextFrom` | Store text only in Maestro's local clipboard variable; these commands do not set the OS clipboard. Literal `setClipboard` text is limited to 16 KiB UTF-8. `pasteText` requires an earlier clipboard command and uses the viewer input path below. |
 | `runFlow` | File-based or inline subflows, optionally gated by native visible/notVisible/platform conditions and parameterized with scoped `env` strings. Nested commands must belong to this same supported subset; see the limits below. |
 | `setLocation` | Finite latitude in −90…90 and longitude in −180…180 degrees. Supported by the current Android emulator/iOS simulator worker paths, not physical iOS. |
+| `stopApp`, `clearState`, `clearKeychain`, `setPermissions`, `setOrientation`, full `launchApp` | Deployment-gated; see [app lifecycle](#deployment-gated-app-lifecycle). |
 | `setDarkMode` | Explicit `enabled` or `disabled` through system appearance setting. Current worker support is emulator/simulator-only; toggles and appearance assertions are unsupported. |
 | `openLink` | Plain absolute HTTP(S) or app-scheme links, with `autoVerify: false` and `browser: false` (also the scalar form's defaults). Uses system URL routing without forcing a target app. URLs are limited to 8 KiB UTF-8; relative, control-character, embedded-credential, `file:`, `data:`, `javascript:`, and `intent:` links are rejected. |
 
@@ -299,16 +300,56 @@ platform geometry; an explicit duration is forwarded unchanged, not replaced wit
 a fixed provider timing. Capability advertisement is a deployment contract, not
 evidence of actual device timing or physical-iOS compatibility.
 
+## Deployment-gated app lifecycle
+
+These commands need a worker that advertises the named boolean health capability.
+As with gestures, the runner checks the capability before the first flow mutation
+and fails the whole flow when it is missing, false, or malformed. Every operation
+is targeted at an explicit app ID; nothing acts on whichever app is in front.
+
+| Command | Required health capability | Semantics and limits |
+| --- | --- | --- |
+| `launchApp` (any form other than `stopApp: false` with `permissions: {}`) | `supports_app_lifecycle` | Follows Maestro's order: `clearKeychain`, `clearState`, `setPermissions` (default `all: allow`), then a targeted stop when `stopApp` is not false, then launch. `arguments` accepts 1–64 entries with names of 1–128 `[A-Za-z0-9_.-]` characters and string (≤4 KiB, no control characters), integer, finite number, or boolean values. |
+| `stopApp` | `supports_app_lifecycle` | Targeted terminate of the flow's or the named app. |
+| `killApp` | `supports_app_lifecycle` | iOS only, as a targeted terminate. Android's `killApp` simulates system process death, which a force-stop does not reproduce, so it is rejected. |
+| `clearState` | `supports_app_lifecycle` | Resets the app's data, then resets all its permissions to `unset` like Maestro. Not available on physical iOS. |
+| `clearKeychain` | `supports_app_lifecycle` on iOS | Resets the simulator keychain. A local no-op on Android, matching Maestro's Android driver. |
+| `setPermissions` | `supports_app_lifecycle` | Maestro permission names with `allow`, `deny`, or `unset`. Android also accepts fully qualified `*.permission.*` names. Names that do not exist on the platform fail preflight. |
+| `setOrientation` | `supports_precise_orientation` | `PORTRAIT`, `LANDSCAPE_LEFT`, `LANDSCAPE_RIGHT`, or `UPSIDE_DOWN`, applied exactly or not at all. |
+
+## Conformance against Maestro's public e2e flows
+
+`conformance/maestro-e2e.sh` measures the runner against the flows Maestro uses to
+test itself (`e2e/demo_app` and `e2e/workspaces/wikipedia` at the pinned Maestro
+release). Each flow carries a `passing` or `failing` tag, so a run checks both
+directions. Without `--session` it only classifies every flow offline as supported
+or by its first rejected command; with `--session` it also runs each supported
+flow against that existing session, which must already have the workspace's app
+installed (the Wikipedia APK and app are listed in Maestro's `e2e/manifest.txt`;
+the demo app is built from `e2e/demo_app`).
+
+```bash
+./gradlew --no-daemon installDist
+conformance/maestro-e2e.sh --platform android --workspace demo_app
+conformance/maestro-e2e.sh --platform android --workspace wikipedia --session YOUR_RUNNING_SESSION_UUID
+```
+
+The per-flow report is written privately under `.revyl-maestro/conformance/`. The
+same offline check is available for any single flow:
+
+```bash
+build/install/revyl-maestro/bin/revyl-maestro --validate-only --platform ios flow.yaml
+```
+
 ## Remaining limits and cleanup
 
-App stop/kill/reset, keychain, permissions,
-`scrollUntilVisible`, element dragging, orientation, keyboard dismissal, media,
-recording, proxy, airplane mode, AI and web operations remain unsupported. The
-worker's coordinate-based input is not equivalent to typing into current focus;
-the accepted runtime input-fallback limitation is described above.
-The app must already be running; optional
-[non-resetting launch](examples/non-resetting-launch.yaml) still requires
-`stopApp: false` and `permissions: {}`.
+`scrollUntilVisible`, element dragging, keyboard dismissal, media, recording,
+proxy, airplane mode, AI and web operations remain unsupported. The worker's
+coordinate-based input is not equivalent to typing into current focus; the
+accepted runtime input-fallback limitation is described above. Without the
+app-lifecycle capability, the app must already be running and only the
+[non-resetting launch](examples/non-resetting-launch.yaml) form (`stopApp: false`,
+`permissions: {}`) runs.
 
 The adapter does not replay a failed or uncertain request, and stops all remaining
 actions when an acknowledgment fails. **This is not an end-to-end at-most-once

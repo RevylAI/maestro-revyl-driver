@@ -164,7 +164,7 @@ class NativeCommandsTest {
 
     @ParameterizedTest
     @ValueSource(strings = [
-        "- pasteText", "- inputText: ''", "- stopApp", "- killApp", "- clearState", "- clearKeychain",
+        "- pasteText", "- inputText: ''", "- killApp",
         "- swipe: {start: '10, 10', end: '20, 20', duration: 0}", "- swipe: {direction: UP, duration: 10001}", "- scrollUntilVisible: {element: {text: Continue}}",
         "- hideKeyboard", "- pressKey: Tab", "- pressKey: Power", "- pressKey: 'Volume Up'", "- pressKey: Lock",
         "- eraseText: 0", "- eraseText: -1", "- eraseText: 101", "- eraseText: 2147483647", "- eraseText: 1.5",
@@ -190,7 +190,7 @@ class NativeCommandsTest {
         "- setLocation: {latitude: '\${1}', longitude: 0}", "- setLocation: {latitude: 0, longitude: 0, optional: true}",
         "- setDarkMode: {value: enabled, optional: true}", "- setDarkMode: {value: enabled, unknown: true}",
         "- setDarkMode: not-enabled", "- setDarkMode: {value: enabled, label: '\${1}'}",
-        "- toggleDarkMode", "- assertDarkMode", "- assertLightMode", "- setOrientation: PORTRAIT",
+        "- toggleDarkMode", "- assertDarkMode", "- assertLightMode",
         "- setAirplaneMode: enabled", "- toggleAirplaneMode", "- startRecording: capture", "- stopRecording",
         "- openLink: {link: 'https://example.com', autoVerify: true}", "- openLink: {link: 'https://example.com', browser: true}",
         "- openLink: {link: 'https://example.com', optional: true}", "- openLink: '\${1}'", "- openLink: /relative",

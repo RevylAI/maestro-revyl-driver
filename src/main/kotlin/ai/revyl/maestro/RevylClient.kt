@@ -148,9 +148,13 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
     }
 
     fun act(action: String, body: Map<String, Any>) = guard {
-        requireAdapter(action in setOf("tap", "launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag"), "Unsupported proxy mutation.")
+        requireAdapter(action in setOf("tap", "launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag",
+            "kill_app", "clear_app_state", "clear_keychain", "set_permissions", "set_orientation"), "Unsupported proxy mutation.")
         val capability = when (action) {
             "drag" -> WorkerCapability.EXPLICIT_DRAG_DURATION
+            "kill_app", "clear_app_state", "clear_keychain", "set_permissions" -> WorkerCapability.APP_LIFECYCLE
+            "launch" -> WorkerCapability.APP_LIFECYCLE.takeIf { "arguments" in body }
+            "set_orientation" -> WorkerCapability.PRECISE_ORIENTATION
             else -> null
         }
         requireAdapter(capability == null || capability in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")

@@ -48,7 +48,8 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
                         tapped = true
                         Reply(bytes = "{\"success\":true,\"action\":\"tap\"}".toByteArray())
                     }
-                    request.method == "POST" && request.path in setOf("launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag").map { "/api/v1/execution/device-proxy/$WORKFLOW/$it" } -> {
+                    request.method == "POST" && request.path in setOf("launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag",
+                        "kill_app", "clear_app_state", "clear_keychain", "set_permissions", "set_orientation").map { "/api/v1/execution/device-proxy/$WORKFLOW/$it" } -> {
                         val action = when (request.path.substringAfterLast('/')) {
                             "longpress" -> "long_press"
                             else -> request.path.substringAfterLast('/')
