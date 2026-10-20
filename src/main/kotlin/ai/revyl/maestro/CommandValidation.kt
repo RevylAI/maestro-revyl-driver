@@ -18,6 +18,38 @@ internal enum class WorkerCapability(val field: String) {
     EXPLICIT_DRAG_DURATION("supports_explicit_drag_duration"),
     APP_LIFECYCLE("supports_app_lifecycle"),
     PRECISE_ORIENTATION("supports_precise_orientation"),
+    KEYBOARD_CONTROL("supports_keyboard_control"),
+    ADD_MEDIA("supports_add_media"),
+    APPEARANCE_READ("supports_appearance_read"),
+    AIRPLANE_MODE("supports_airplane_mode"),
+    SCREEN_RECORDING("supports_screen_recording"),
+}
+
+internal const val MAX_MEDIA_FILE_BYTES = 25L * 1024 * 1024
+internal const val MAX_RECORDING_BYTES = 100L * 1024 * 1024
+internal const val MAX_RANDOM_INPUT_LENGTH = 1_000
+internal const val MAX_TRAVEL_POINTS = 20
+internal const val TRAVEL_STEPS_PER_SEGMENT = 50
+internal const val MAX_TRAVEL_DURATION_MS = 1_800_000L
+internal const val MAX_TRAVEL_SPEED_MPS = 10_000.0
+internal const val PRIVATE_OUTPUT_DIRECTORY = ".revyl-maestro"
+
+private val mediaNamePattern = Regex("[A-Za-z0-9._-]{1,128}")
+private val mediaExtensions = setOf("png", "jpg", "jpeg", "gif", "heic", "mp4", "mov")
+private val artifactSegmentPattern = Regex("[A-Za-z0-9_-]{1,80}")
+
+internal fun requireMediaFile(file: java.io.File) {
+    requireAdapter(mediaNamePattern.matches(file.name) && file.extension.lowercase() in mediaExtensions,
+        "Media files need a simple name of at most 128 characters ending in png, jpg, jpeg, gif, heic, mp4, or mov.")
+    val path = file.toPath()
+    requireAdapter(java.nio.file.Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) && java.nio.file.Files.size(path) in 1..MAX_MEDIA_FILE_BYTES,
+        "Media files must be nonempty regular files of at most 25 MiB.")
+}
+
+internal fun requireArtifactPath(path: String) {
+    val segments = path.split('/')
+    requireAdapter(!path.contains("\${") && segments.size in 1..8 && segments.all { artifactSegmentPattern.matches(it) },
+        "Screenshot and recording paths must be literal relative names of simple segments without extensions or parent references.")
 }
 
 internal const val MAX_LAUNCH_ARGUMENTS = 64

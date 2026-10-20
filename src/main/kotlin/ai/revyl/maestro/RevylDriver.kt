@@ -17,16 +17,25 @@ import okio.buffer
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.nio.ByteBuffer
+import java.util.Base64
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.zip.CRC32
 import javax.imageio.ImageIO
 
 class RevylDriver(private val client: RevylClient, private val platform: String) : Driver {
     private var closed = false
+    private var recording: ScreenRecording? = null
+    private val recordingTimer = Executors.newSingleThreadScheduledExecutor { runnable -> Thread(runnable, "revyl-recording-deadline").apply { isDaemon = true } }
 
     override fun name(): String = "Revyl (native subset)"
     override fun open() { requireAdapter(!closed, "The local Revyl driver is closed.") }
-    override fun close() { closed = true; client.close() }
+    override fun close() {
+        try { recording?.close() } finally { closed = true; recordingTimer.shutdownNow(); client.close() }
+    }
     override fun isShutdown(): Boolean = closed
     override fun capabilities(): List<Capability> = emptyList()
 
@@ -124,7 +133,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     }
 
     override fun waitUntilScreenIsStatic(timeoutMs: Long): Boolean {
-        requireAdapter(timeoutMs in 1..120_000, "Screen wait must be bounded to 120000 milliseconds.")
+        requireAdapter(timeoutMs in 1..1_800_000, "Screen wait must be bounded to 1800000 milliseconds.")
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
         var previous = screenshot()
         while (System.nanoTime() < deadline) {
@@ -185,7 +194,11 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         val info = deviceInfo()
         swipe(Point(info.widthGrid / 2, info.heightGrid / 2), Point(info.widthGrid / 2, info.heightGrid / 10), if (platform == "ios") 333 else 400)
     }
-    override fun isKeyboardVisible(): Nothing = unsupported()
+    override fun isKeyboardVisible(): Boolean = client.guard {
+        val visible = client.readState("keyboard").path("visible")
+        requireAdapter(visible.isBoolean, "Revyl returned an invalid keyboard state.")
+        visible.booleanValue()
+    }
     override fun swipe(start: Point, end: Point, durationMs: Long) = client.guard {
         requireSwipeDuration(durationMs)
         val info = deviceInfo()
@@ -226,8 +239,31 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         requirePlainLink(link, autoVerify, browser)
         client.act("open_url", mapOf("url" to link))
     }
-    override fun hideKeyboard(): Nothing = unsupported()
-    override fun startScreenRecording(out: Sink): ScreenRecording = unsupported()
+    override fun hideKeyboard() = client.guard { client.act("hide_keyboard", emptyMap()) }
+
+    override fun startScreenRecording(out: Sink): ScreenRecording = client.guard {
+        val recordingId = client.startScreenRecording()
+        var timer: ScheduledFuture<*>? = null
+        val result = object : ScreenRecording {
+            private var stopped = false
+            @Synchronized override fun close() {
+                if (stopped) return
+                stopped = true
+                timer?.cancel(false)
+                client.guard {
+                    try {
+                        val video = client.stopScreenRecording(recordingId)
+                        out.buffer().use { it.write(video) }
+                    } catch (_: IOException) {
+                        throw AdapterFailure("Could not write the private recording output; no adapter retry was attempted.")
+                    }
+                }
+            }
+        }
+        recording = result
+        timer = recordingTimer.schedule({ result.close() }, 180, TimeUnit.SECONDS)
+        result
+    }
     override fun setLocation(latitude: Double, longitude: Double) = client.guard {
         requireLocation(latitude, longitude)
         client.act("set_location", mapOf("latitude" to latitude, "longitude" to longitude))
@@ -247,10 +283,37 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     }
     override fun setProxy(host: String, port: Int): Nothing = unsupported()
     override fun resetProxy(): Nothing = unsupported()
-    override fun addMedia(mediaFiles: List<File>): Nothing = unsupported()
-    override fun isAirplaneModeEnabled(): Boolean = unsupported()
-    override fun setAirplaneMode(enabled: Boolean): Nothing = unsupported()
-    override fun isDarkModeEnabled(): Boolean = unsupported()
+    override fun addMedia(mediaFiles: List<File>) = client.guard {
+        requireAdapter(mediaFiles.isNotEmpty(), "addMedia requires at least one file.")
+        mediaFiles.forEach(::requireMediaFile)
+        mediaFiles.forEach { file ->
+            val bytes = try { file.inputStream().use { it.readNBytes(MAX_MEDIA_FILE_BYTES.toInt() + 1) } } catch (_: IOException) {
+                throw AdapterFailure("Could not read a media file; no media request was sent for it.")
+            }
+            requireAdapter(bytes.size.toLong() in 1..MAX_MEDIA_FILE_BYTES, "Media files must be nonempty regular files of at most 25 MiB.")
+            client.act("add_media", mapOf("name" to file.name, "content_base64" to Base64.getEncoder().encodeToString(bytes)))
+        }
+    }
+
+    override fun isAirplaneModeEnabled(): Boolean = client.guard {
+        if (platform != "android") unsupported()
+        val enabled = client.readState("airplane_mode").path("enabled")
+        requireAdapter(enabled.isBoolean, "Revyl returned an invalid airplane mode state.")
+        enabled.booleanValue()
+    }
+
+    override fun setAirplaneMode(enabled: Boolean) = client.guard {
+        if (platform != "android") unsupported()
+        client.act("set_airplane_mode", mapOf("enabled" to enabled))
+    }
+
+    override fun isDarkModeEnabled(): Boolean = client.guard {
+        when (client.readState("appearance").path("appearance").textValue()) {
+            "dark" -> true
+            "light" -> false
+            else -> throw AdapterFailure("Revyl returned an invalid appearance state.")
+        }
+    }
     override fun setDarkMode(enabled: Boolean) { client.act("set_appearance", mapOf("appearance" to if (enabled) "dark" else "light")) }
     override fun queryOnDeviceElements(query: OnDeviceElementQuery): List<TreeNode> = unsupported()
 }

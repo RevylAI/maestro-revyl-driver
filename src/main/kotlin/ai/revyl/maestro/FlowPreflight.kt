@@ -30,18 +30,136 @@ import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.WaitForAnimationToEndCommand
+import maestro.orchestra.AddMediaCommand
+import maestro.orchestra.AssertDarkModeCommand
+import maestro.orchestra.AssertLightModeCommand
+import maestro.orchestra.AssertNoDefectsWithAICommand
+import maestro.orchestra.AssertScreenshotCommand
+import maestro.orchestra.AssertWithAICommand
+import maestro.orchestra.ExtractTextWithAICommand
+import maestro.orchestra.HideKeyboardCommand
+import maestro.orchestra.InputRandomCommand
+import maestro.orchestra.MaestroOnFlowComplete
+import maestro.orchestra.MaestroOnFlowStart
+import maestro.orchestra.ScrollUntilVisibleCommand
+import maestro.orchestra.SetAirplaneModeCommand
+import maestro.orchestra.StartRecordingCommand
+import maestro.orchestra.StopRecordingCommand
+import maestro.orchestra.ToggleAirplaneModeCommand
+import maestro.orchestra.ToggleDarkModeCommand
+import maestro.orchestra.TravelCommand
+import maestro.js.JsEngine
+import maestro.orchestra.util.Env.evaluateScripts
+import java.util.UUID
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
 
+class ValidatedFlow(val commands: List<MaestroCommand>, internal val referenceCopies: Map<Path, Path>, internal val dynamicPaths: Map<String, (JsEngine) -> String> = emptyMap())
+
+private val imageExtensions = listOf(".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".wbmp", ".heic", ".heif")
+
+private class ArtifactPlan(private val workspaceRoot: Path?, private val compat: Boolean) {
+    private val screenshots = mutableSetOf<String>()
+    private val outputs = mutableSetOf<String>()
+    val referenceCopies = linkedMapOf<Path, Path>()
+    val dynamicPaths = linkedMapOf<String, (JsEngine) -> String>()
+
+    private fun dynamic(path: String, resolve: (String) -> String): String {
+        val identifier = "__REVYL_ARTIFACT_${UUID.randomUUID().toString().replace("-", "")}"
+        dynamicPaths[identifier] = { engine ->
+            val value = path.evaluateScripts(engine)
+            requireAdapter(!value.contains("\${"), "Artifact expressions must resolve to a path without nested expressions.")
+            resolve(value)
+        }
+        return "\${$identifier}"
+    }
+
+    fun screenshot(command: TakeScreenshotCommand): TakeScreenshotCommand {
+        if (compat && command.path.contains("\${")) return command.copy(path = dynamic(command.path) { value ->
+            val fresh = "$PRIVATE_OUTPUT_DIRECTORY/$value.png" !in outputs
+            val resolved = screenshot(command.copy(path = value))
+            if (fresh) FlowPreflight.prepareOutput(ValidatedFlow(listOf(MaestroCommand(takeScreenshotCommand = resolved)), emptyMap()), true)
+            resolved.path
+        })
+        requireArtifactPath(command.path)
+        screenshots += command.path
+        outputs += "$PRIVATE_OUTPUT_DIRECTORY/${command.path}.png"
+        return command.copy(path = "$PRIVATE_OUTPUT_DIRECTORY/${command.path}")
+    }
+
+    fun recording(command: StartRecordingCommand): StartRecordingCommand {
+        if (compat && command.path.contains("\${")) return command.copy(path = dynamic(command.path) { value ->
+            val file = "$PRIVATE_OUTPUT_DIRECTORY/$value.mp4"
+            val fresh = file !in outputs
+            val resolved = recording(command.copy(path = value))
+            if (fresh) FlowPreflight.prepareOutput(ValidatedFlow(listOf(MaestroCommand(startRecordingCommand = resolved)), emptyMap()), true)
+            resolved.path
+        })
+        requireArtifactPath(command.path)
+        outputs += "$PRIVATE_OUTPUT_DIRECTORY/${command.path}.mp4"
+        return command.copy(path = "$PRIVATE_OUTPUT_DIRECTORY/${command.path}")
+    }
+
+    fun reference(command: AssertScreenshotCommand): AssertScreenshotCommand {
+        if (compat) return command.copy(path = dynamic(command.path) { value ->
+            val resolved = resolvedReference(command.copy(path = value))
+            val target = Path.of(resolved.path)
+            referenceCopies[target]?.let { source -> FlowPreflight.prepareOutput(ValidatedFlow(emptyList(), mapOf(target to source)), true) }
+            resolved.path
+        })
+        return resolvedReference(command)
+    }
+
+    private fun resolvedReference(command: AssertScreenshotCommand): AssertScreenshotCommand {
+        requireAdapter(!command.path.contains("\${") && command.path.isNotBlank() && command.path.none { it.isISOControl() }, "assertScreenshot references must be literal relative paths.")
+        val withExtension = if (imageExtensions.any { command.path.endsWith(it, ignoreCase = true) }) command.path else "${command.path}.png"
+        val relative = Path.of(withExtension)
+        requireAdapter(!relative.isAbsolute, "assertScreenshot references must be literal relative paths.")
+        val flowDirectory = command.flowPath ?: throw AdapterFailure("assertScreenshot requires a flow file location.")
+        val candidate = flowDirectory.resolve(relative).normalize()
+        if (Files.isRegularFile(candidate)) {
+            val source = candidate.toRealPath()
+            requireAdapter(source.startsWith((workspaceRoot ?: flowDirectory).toRealPath()), "assertScreenshot references must stay inside the flow's Maestro workspace.")
+            requireAdapter(Files.size(source) in 1..MAX_MEDIA_FILE_BYTES, "assertScreenshot references must be nonempty files of at most 25 MiB.")
+            val target = Path.of(PRIVATE_OUTPUT_DIRECTORY, "references", "${UUID.randomUUID()}${withExtension.substring(withExtension.lastIndexOf('.'))}").toAbsolutePath()
+            referenceCopies[target] = source
+            return command.copy(path = target.toString())
+        }
+        val produced = relative.normalize().toString().removeSuffix(".png")
+        requireAdapter(withExtension.endsWith(".png") && produced in screenshots,
+            "assertScreenshot needs an existing reference inside the flow's workspace or an earlier takeScreenshot with the same path.")
+        return command.copy(path = Path.of(PRIVATE_OUTPUT_DIRECTORY, "$produced.png").toAbsolutePath().toString())
+    }
+
+    fun media(command: AddMediaCommand) {
+        requireAdapter(command.mediaPaths.isNotEmpty(), "addMedia requires at least one file.")
+        command.mediaPaths.forEach {
+            requireAdapter(!it.contains("\${"), "addMedia files must be literal paths.")
+            val file = Path.of(it)
+            requireMediaFile(file.toFile())
+            workspaceRoot?.let { root -> requireAdapter(file.toRealPath().startsWith(root.toRealPath()), "addMedia files must stay inside the flow's Maestro workspace.") }
+        }
+    }
+}
+
 object FlowPreflight {
     @Volatile var rejectedCommand: String? = null
         private set
 
-    fun validate(commands: List<MaestroCommand>, platform: String): List<MaestroCommand> {
+    fun validate(commands: List<MaestroCommand>, platform: String): List<MaestroCommand> = validateFlow(commands, platform).commands
+
+    internal fun workspaceRoot(flow: Path): Path {
+        val directory = flow.toAbsolutePath().normalize().parent
+        return generateSequence(directory) { it.parent }.take(MAX_FLOW_DEPTH).firstOrNull { Files.isRegularFile(it.resolve("config.yaml")) } ?: directory
+    }
+
+    fun validateFlow(commands: List<MaestroCommand>, platform: String, compat: Boolean = false, flow: Path? = null): ValidatedFlow {
         rejectedCommand = null
         requireAdapter(platform in setOf("android", "ios"), "Platform must be android or ios.")
+        val plan = ArtifactPlan(flow?.let(::workspaceRoot), compat)
+        if (compat) return ValidatedFlow(mapTree(commands, 0) { compatCommand(it, platform, plan) }, plan.referenceCopies, plan.dynamicPaths)
         FlowSourceOptions.validate(commands)
         val resolvedCommands = FlowParameters.resolve(commands, platform)
         var expandedCommands = 0
@@ -184,22 +302,98 @@ object FlowPreflight {
                             "Orientation must be a literal portrait, landscapeLeft, landscapeRight, or upsideDown.",
                         )
                         is TakeScreenshotCommand -> {
-                            if (command.cropOn != null) unsupported()
-                            requireAdapter(Regex("[A-Za-z0-9_-]{1,80}").matches(command.path), "Screenshot names must be simple names without directories or extensions.")
+                            command.cropOn?.let(::selector)
+                            validated = wrapper.copy(takeScreenshotCommand = plan.screenshot(command))
                         }
+                        is AssertScreenshotCommand -> {
+                            command.cropOn?.let(::selector)
+                            requireAdapter(command.thresholdPercentage.toDoubleOrNull()?.let { it.isFinite() && it in 0.0..100.0 } == true, "assertScreenshot threshold must be a literal percentage from 0 to 100.")
+                            validated = wrapper.copy(assertScreenshotCommand = plan.reference(command))
+                        }
+                        is StartRecordingCommand -> validated = wrapper.copy(startRecordingCommand = plan.recording(command))
+                        is StopRecordingCommand, is HideKeyboardCommand, is ToggleDarkModeCommand, is AssertDarkModeCommand, is AssertLightModeCommand -> Unit
+                        is AddMediaCommand -> {
+                            plan.media(command)
+                            commandCount = command.mediaPaths.size
+                        }
+                        is SetAirplaneModeCommand, is ToggleAirplaneModeCommand -> if (platform != "android") unsupported()
+                        is InputRandomCommand -> requireAdapter(command.length == null || command.length in 1..MAX_RANDOM_INPUT_LENGTH, "Random input length must be an integer from 1 to 1000.")
+                        is TravelCommand -> commandCount = travelSteps(command)
                         is WaitForAnimationToEndCommand -> timeout(command.timeout)
                         else -> unsupported()
                     }
                     expandedCommands += commandCount
                     requireAdapter(expandedCommands <= MAX_EXPANDED_COMMANDS, "Flow exceeds the 1000 expanded-command limit.")
-                    if (command is TakeScreenshotCommand) wrapper.copy(takeScreenshotCommand = command.copy(path = ".revyl-maestro/${command.path}")) else validated
+                    validated
                 } catch (failure: AdapterFailure) {
                     if (rejectedCommand == null) rejectedCommand = command::class.simpleName
                     throw failure
                 }
             }
         }
-        return validateCommands(resolvedCommands, 0, true)
+        return ValidatedFlow(validateCommands(resolvedCommands, 0, true), plan.referenceCopies)
+    }
+
+    private fun travelSteps(command: TravelCommand): Int {
+        val points = command.points.map {
+            val latitude = it.latitude.toDoubleOrNull() ?: throw AdapterFailure("Travel points must be literal numbers.")
+            val longitude = it.longitude.toDoubleOrNull() ?: throw AdapterFailure("Travel points must be literal numbers.")
+            requireLocation(latitude, longitude)
+            it
+        }
+        requireAdapter(points.size in 2..MAX_TRAVEL_POINTS, "Travel requires 2 to 20 points.")
+        val speed = command.speedMPS ?: 4.0
+        requireAdapter(speed.isFinite() && speed in 0.1..MAX_TRAVEL_SPEED_MPS, "Travel speed must be from 0.1 to 10000 meters per second.")
+        val durationMs = points.zipWithNext { start, end -> start.getDistanceInMeters(end) }.sum() / speed * 1_000
+        requireAdapter(durationMs <= MAX_TRAVEL_DURATION_MS, "Travel must finish within 1800000 milliseconds at the requested speed.")
+        return 1 + TRAVEL_STEPS_PER_SEGMENT * (points.size - 1)
+    }
+
+    private fun compatCommand(wrapper: MaestroCommand, platform: String, plan: ArtifactPlan): MaestroCommand {
+        val command = wrapper.asCommand() ?: unsupported()
+        try {
+            return when (command) {
+                is AssertWithAICommand, is AssertNoDefectsWithAICommand, is ExtractTextWithAICommand -> unsupported()
+                is ApplyConfigurationCommand -> {
+                    if (command.config.ext["androidWebViewHierarchy"] == "devtools") unsupported()
+                    wrapper
+                }
+                is BackPressCommand -> if (platform != "android") unsupported() else wrapper
+                is KillAppCommand -> if (platform == "android") unsupported() else wrapper
+                is SetAirplaneModeCommand, is ToggleAirplaneModeCommand -> if (platform != "android") unsupported() else wrapper
+                is PressKeyCommand -> wrapper.also { requireSupportedKey(command.code, platform) }
+                is TakeScreenshotCommand -> wrapper.copy(takeScreenshotCommand = plan.screenshot(command))
+                is StartRecordingCommand -> wrapper.copy(startRecordingCommand = plan.recording(command))
+                is AssertScreenshotCommand -> wrapper.copy(assertScreenshotCommand = plan.reference(command))
+                is AddMediaCommand -> wrapper.also { plan.media(command) }
+                else -> wrapper
+            }
+        } catch (failure: AdapterFailure) {
+            if (rejectedCommand == null) rejectedCommand = command::class.simpleName
+            throw failure
+        }
+    }
+
+    private fun mapTree(commands: List<MaestroCommand>, depth: Int, transform: (MaestroCommand) -> MaestroCommand): List<MaestroCommand> {
+        requireAdapter(depth <= MAX_FLOW_DEPTH, "Flow exceeds the 16-level subflow depth limit.")
+        fun hooks(config: MaestroConfig?): MaestroConfig? = config?.copy(
+            onFlowStart = config.onFlowStart?.let { MaestroOnFlowStart(mapTree(it.commands, depth + 1, transform)) },
+            onFlowComplete = config.onFlowComplete?.let { MaestroOnFlowComplete(mapTree(it.commands, depth + 1, transform)) },
+        )
+        return commands.map { original ->
+            val wrapper = transform(original)
+            val runFlow = wrapper.runFlowCommand
+            val repeat = wrapper.repeatCommand
+            val retry = wrapper.retryCommand
+            val configuration = wrapper.applyConfigurationCommand
+            when {
+                runFlow != null -> wrapper.copy(runFlowCommand = runFlow.copy(commands = mapTree(runFlow.commands, depth + 1, transform), config = hooks(runFlow.config)))
+                repeat != null -> wrapper.copy(repeatCommand = repeat.copy(commands = mapTree(repeat.commands, depth + 1, transform)))
+                retry != null -> wrapper.copy(retryCommand = retry.copy(commands = mapTree(retry.commands, depth + 1, transform), config = hooks(retry.config)))
+                configuration != null -> wrapper.copy(applyConfigurationCommand = configuration.copy(config = hooks(configuration.config)!!))
+                else -> wrapper
+            }
+        }
     }
 
     private fun validateConfig(config: MaestroConfig) {
@@ -213,17 +407,24 @@ object FlowPreflight {
         requireAdapter(depth <= MAX_FLOW_DEPTH, "Flow exceeds the 16-level subflow depth limit.")
         commands.forEach {
             yield(it)
-            it.runFlowCommand?.let { nested -> yieldAll(allCommands(nested.commands, depth + 1)) }
+            val config = it.applyConfigurationCommand?.config ?: it.runFlowCommand?.config ?: it.retryCommand?.config
+            listOfNotNull(config?.onFlowStart?.commands, it.runFlowCommand?.commands, it.repeatCommand?.commands, it.retryCommand?.commands, config?.onFlowComplete?.commands)
+                .forEach { nested -> yieldAll(allCommands(nested, depth + 1)) }
         }
     }
 
     internal fun requiredCapabilities(commands: List<MaestroCommand>, platform: String): Set<WorkerCapability> = allCommands(commands).mapNotNull {
         when (val command = it.asCommand()) {
-            is SwipeCommand, is ScrollCommand -> WorkerCapability.EXPLICIT_DRAG_DURATION
+            is SwipeCommand, is ScrollCommand, is ScrollUntilVisibleCommand -> WorkerCapability.EXPLICIT_DRAG_DURATION
             is LaunchAppCommand -> WorkerCapability.APP_LIFECYCLE.takeIf { requiresAppLifecycle(command, platform) }
             is StopAppCommand, is KillAppCommand, is ClearStateCommand, is SetPermissionsCommand -> WorkerCapability.APP_LIFECYCLE
             is ClearKeychainCommand -> WorkerCapability.APP_LIFECYCLE.takeIf { platform == "ios" }
             is SetOrientationCommand -> WorkerCapability.PRECISE_ORIENTATION
+            is HideKeyboardCommand -> WorkerCapability.KEYBOARD_CONTROL
+            is AddMediaCommand -> WorkerCapability.ADD_MEDIA
+            is ToggleDarkModeCommand, is AssertDarkModeCommand, is AssertLightModeCommand -> WorkerCapability.APPEARANCE_READ
+            is SetAirplaneModeCommand, is ToggleAirplaneModeCommand -> WorkerCapability.AIRPLANE_MODE
+            is StartRecordingCommand, is StopRecordingCommand -> WorkerCapability.SCREEN_RECORDING
             else -> null
         }
     }.toSet()
@@ -233,7 +434,7 @@ object FlowPreflight {
             (command.clearKeychain == true && platform == "ios") || !command.launchArguments.isNullOrEmpty()
 
     internal fun requiresViewerInput(commands: List<MaestroCommand>): Boolean = allCommands(commands).any {
-        it.asCommand() is InputTextCommand || it.asCommand() is PasteTextCommand
+        it.asCommand() is InputTextCommand || it.asCommand() is PasteTextCommand || it.asCommand() is InputRandomCommand
     }
 
     private fun tapCount(longPress: Boolean?, repeat: maestro.TapRepeat?): Int {
@@ -243,21 +444,33 @@ object FlowPreflight {
         return repeat.repeat
     }
 
-    fun prepareScreenshotDirectory(commands: List<MaestroCommand>) {
-        val screenshots = allCommands(commands).mapNotNull { it.takeScreenshotCommand }.toList()
-        if (screenshots.isEmpty()) return
-        val directory = Path.of(".revyl-maestro")
-        requireAdapter(!Files.isSymbolicLink(directory), "Screenshot directory must not be a symlink.")
-        if (!Files.exists(directory, NOFOLLOW_LINKS)) {
-            Files.createDirectory(directory, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
+    fun prepareScreenshotDirectory(commands: List<MaestroCommand>) = prepareOutput(ValidatedFlow(commands, emptyMap()), compat = false)
+
+    fun prepareOutput(flow: ValidatedFlow, compat: Boolean) {
+        val artifacts = allCommands(flow.commands).mapNotNull {
+            it.takeScreenshotCommand?.let { command -> "${command.path}.png" } ?: it.startRecordingCommand?.let { command -> "${command.path}.mp4" }
+        }.filterNot { compat && it.contains("\${") }.toList().let { if (compat) it.distinct() else it }
+        if (artifacts.isEmpty() && flow.referenceCopies.isEmpty()) return
+        val root = Path.of(PRIVATE_OUTPUT_DIRECTORY)
+        val directoryPermissions = PosixFilePermissions.fromString("rwx------")
+        fun privateDirectory(directory: Path) {
+            requireAdapter(!Files.isSymbolicLink(directory), "Private output directories must not be symlinks.")
+            if (!Files.exists(directory, NOFOLLOW_LINKS)) Files.createDirectory(directory, PosixFilePermissions.asFileAttribute(directoryPermissions))
+            requireAdapter(Files.isDirectory(directory, NOFOLLOW_LINKS), "Screenshot output must be a private directory.")
+            Files.setPosixFilePermissions(directory, directoryPermissions)
         }
-        requireAdapter(Files.isDirectory(directory, NOFOLLOW_LINKS), "Screenshot output must be a private directory.")
-        Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------"))
-        screenshots.forEach {
-            val path = Path.of("${it.path}.png")
-            requireAdapter(!Files.exists(path, NOFOLLOW_LINKS), "Screenshot output already exists; choose a new name or remove the private artifact.")
-            Files.createFile(path, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+        fun privateFile(file: Path): Path {
+            val relative = root.toAbsolutePath().relativize(file.toAbsolutePath().normalize())
+            requireAdapter(!relative.startsWith(".."), "Private output must stay inside the output directory.")
+            var directory = root
+            privateDirectory(directory)
+            relative.parent?.forEach { directory = directory.resolve(it); privateDirectory(directory) }
+            requireAdapter(!Files.exists(file, NOFOLLOW_LINKS), "Screenshot or recording output already exists; choose a new name or remove the private artifact.")
+            return Files.createFile(file, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
         }
+        privateDirectory(root)
+        artifacts.forEach { privateFile(Path.of(it)) }
+        flow.referenceCopies.forEach { (target, source) -> Files.write(privateFile(target), Files.readAllBytes(source)) }
     }
 
     private fun timeout(value: String?) {

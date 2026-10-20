@@ -3,19 +3,22 @@
 # Without --session it only classifies flows offline (supported subset or the first
 # rejected command). With --session it also runs every supported flow against that
 # existing Revyl session and checks the outcome against the flow's passing/failing tag.
+# --maestro-compat classifies and runs flows in the runner's opt-in Maestro compatibility mode.
 set -euo pipefail
+umask 077
 
 usage() {
-  echo "Usage: conformance/maestro-e2e.sh --platform android|ios --workspace demo_app|wikipedia [--session UUID] [--maestro-ref REF] [--out DIR]" >&2
+  echo "Usage: conformance/maestro-e2e.sh --platform android|ios --workspace demo_app|wikipedia [--session UUID] [--maestro-compat] [--maestro-ref REF] [--out DIR]" >&2
   exit 2
 }
 
-platform="" workspace="" session="" ref="cli-2.10.0" out=".revyl-maestro/conformance"
+platform="" workspace="" session="" ref="cli-2.10.0" out=".revyl-maestro/conformance" mode=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --platform) platform="$2"; shift 2 ;;
     --workspace) workspace="$2"; shift 2 ;;
     --session) session="$2"; shift 2 ;;
+    --maestro-compat) mode=(--maestro-compat); shift ;;
     --maestro-ref) ref="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
     *) usage ;;
@@ -34,12 +37,13 @@ runner="$root/build/install/revyl-maestro/bin/revyl-maestro"
 
 checkout="$root/.revyl-maestro/upstream-$ref"
 if [ ! -d "$checkout/.git" ]; then
-  git clone --quiet --depth 1 --branch "$ref" --filter=blob:none --sparse https://github.com/mobile-dev-inc/maestro.git "$checkout"
-  git -C "$checkout" sparse-checkout set e2e >/dev/null
+  env -u REVYL_API_KEY git clone --quiet --depth 1 --branch "$ref" --filter=blob:none --sparse https://github.com/mobile-dev-inc/maestro.git "$checkout"
+  env -u REVYL_API_KEY git -C "$checkout" sparse-checkout set e2e >/dev/null
 fi
 
 mkdir -p "$out"
-report="$out/$workspace-$platform.tsv"
+chmod 700 "$out"
+report="$out/$workspace-$platform${mode:+-compat}.tsv"
 printf 'flow\texpected\tpreflight\tlive\tverdict\n' > "$report"
 other_platforms="$(printf 'android\nios\nweb\n' | grep -vx "$platform" | paste -sd'|')"
 
@@ -49,16 +53,16 @@ while IFS= read -r flow; do
   [ -n "$expected" ] || continue
   if printf '%s\n' "$header" | grep -qE "^\s*-\s*($other_platforms)\s*$"; then continue; fi
   name="${flow#"$checkout/$flows_path/"}"
-  if preflight="$(env -u REVYL_API_KEY "$runner" --validate-only --platform "$platform" "$flow" 2>&1)"; then
+  if preflight="$(env -u REVYL_API_KEY "$runner" "${mode[@]}" --validate-only --platform "$platform" "$flow" 2>&1)"; then
     preflight_result="supported"
   else
-    preflight_result="$(printf '%s' "$preflight" | grep -oE 'Rejected command: [A-Za-z]+' | sed 's/Rejected command: //' || true)"
+    preflight_result="$(printf '%s' "$preflight" | grep -oE 'Rejected command: [A-Za-z]+Command' | sed 's/Rejected command: //' || true)"
     if [ -z "$preflight_result" ] && printf '%s' "$preflight" | grep -q 'simple parameter references'; then preflight_result="JavaScript"; fi
     preflight_result="unsupported:${preflight_result:-FlowOptionOrHook}"
   fi
   live="-" verdict="-"
   if [ -n "$session" ] && [ "$preflight_result" = "supported" ]; then
-    if (cd "$out" && "$runner" --session "$session" --platform "$platform" "$flow" >/dev/null 2>&1); then live="passed"; else live="failed"; fi
+    if (cd "$out" && "$runner" "${mode[@]}" --session "$session" --platform "$platform" "$flow" >/dev/null 2>&1); then live="passed"; else live="failed"; fi
     if { [ "$expected" = passing ] && [ "$live" = passed ]; } || { [ "$expected" = failing ] && [ "$live" = failed ]; }; then verdict="ok"; else verdict="mismatch"; fi
   fi
   printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$expected" "$preflight_result" "$live" "$verdict" >> "$report"
@@ -66,7 +70,7 @@ done < <(find "$checkout/$flows_path" -name '*.yaml' ! -name config.yaml | sort)
 
 total=$(($(wc -l < "$report") - 1))
 supported=$(awk -F'\t' 'NR>1 && $3=="supported"' "$report" | wc -l)
-echo "$workspace on $platform: $supported/$total flows inside the supported subset (Maestro $ref)."
+echo "$workspace on $platform${mode:+ (compat)}: $supported/$total flows accepted by preflight (Maestro $ref)."
 awk -F'\t' 'NR>1 && $3!="supported" {print $3}' "$report" | sort | uniq -c | sort -rn | sed 's/^/  /'
 if [ -n "$session" ]; then
   ok=$(awk -F'\t' 'NR>1 && $5=="ok"' "$report" | wc -l)

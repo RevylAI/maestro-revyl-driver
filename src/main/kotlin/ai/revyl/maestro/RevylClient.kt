@@ -147,14 +147,51 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         return request("device-proxy/${attachedWorkflow()}/$action")
     }
 
-    fun act(action: String, body: Map<String, Any>) = guard {
+    internal fun readState(action: String): JsonNode = guard {
+        val capability = when (action) {
+            "keyboard" -> WorkerCapability.KEYBOARD_CONTROL
+            "appearance" -> WorkerCapability.APPEARANCE_READ
+            "airplane_mode" -> WorkerCapability.AIRPLANE_MODE
+            else -> throw AdapterFailure("Unsupported proxy read.")
+        }
+        requireAdapter(capability in verifiedCapabilities, "Required worker capability has not been verified; no state was read.")
+        val result = readJson(request("device-proxy/${attachedWorkflow()}/$action"))
+        requireAdapter(result.isObject, "Revyl returned an invalid device state.")
+        result
+    }
+
+    internal fun stopScreenRecording(recordingId: String): ByteArray = guard {
+        requireAdapter(WorkerCapability.SCREEN_RECORDING in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")
+        val (contentType, bytes) = exchange("device-proxy/${attachedWorkflow()}/stop_screen_recording", mapOf("recording_id" to recordingId), MAX_RECORDING_BYTES)
+        requireAdapter(contentType?.startsWith("video/mp4") == true && bytes.size >= 12 && String(bytes, 4, 4, Charsets.US_ASCII) == "ftyp",
+            "Revyl did not return a screen recording. It may have stopped; no adapter retry was attempted.")
+        bytes
+    }
+
+    internal fun startScreenRecording(): String = guard {
+        val recordingId = actForResult("start_screen_recording", emptyMap()).path("recording_id").textValue()
+        requireAdapter(recordingId != null && recordingId.length in 1..128 && recordingId.all { it.code in 33..126 },
+            "Revyl did not return a valid recording identifier. Recording may have started; no adapter retry was attempted.")
+        recordingId!!
+    }
+
+    fun act(action: String, body: Map<String, Any>) {
+        actForResult(action, body)
+    }
+
+    private fun actForResult(action: String, body: Map<String, Any>): JsonNode = guard {
         requireAdapter(action in setOf("tap", "launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag",
-            "kill_app", "clear_app_state", "clear_keychain", "set_permissions", "set_orientation"), "Unsupported proxy mutation.")
+            "kill_app", "clear_app_state", "clear_keychain", "set_permissions", "set_orientation",
+            "hide_keyboard", "add_media", "set_airplane_mode", "start_screen_recording"), "Unsupported proxy mutation.")
         val capability = when (action) {
             "drag" -> WorkerCapability.EXPLICIT_DRAG_DURATION
             "kill_app", "clear_app_state", "clear_keychain", "set_permissions" -> WorkerCapability.APP_LIFECYCLE
             "launch" -> WorkerCapability.APP_LIFECYCLE.takeIf { "arguments" in body }
             "set_orientation" -> WorkerCapability.PRECISE_ORIENTATION
+            "hide_keyboard" -> WorkerCapability.KEYBOARD_CONTROL
+            "add_media" -> WorkerCapability.ADD_MEDIA
+            "set_airplane_mode" -> WorkerCapability.AIRPLANE_MODE
+            "start_screen_recording" -> WorkerCapability.SCREEN_RECORDING
             else -> null
         }
         requireAdapter(capability == null || capability in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")
@@ -169,6 +206,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
                 (!result.has("error") || result.path("error").isNull),
             "Revyl did not confirm action success. It may have executed; no adapter retry was attempted.",
         )
+        result
     }
 
     private fun attachedWorkflow(): String = workflowRunId ?: throw AdapterFailure("No Revyl session is attached.")
@@ -186,7 +224,9 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         }
     }
 
-    private fun request(path: String, body: Map<String, Any>? = null): ByteArray = guard {
+    private fun request(path: String, body: Map<String, Any>? = null): ByteArray = exchange(path, body, MAX_RESPONSE_BYTES.toLong()).second
+
+    private fun exchange(path: String, body: Map<String, Any>?, maxResponseBytes: Long): Pair<String?, ByteArray> = guard {
         requireAdapter(!closed.get() && !Thread.currentThread().isInterrupted, "The local Revyl client is closed or cancelled.")
         val remainingNanos = deadlineNanos - System.nanoTime()
         requireAdapter(remainingNanos > 0, "Flow execution timed out. An action may have executed; no adapter retry was attempted.")
@@ -201,8 +241,8 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         try {
             call.execute().use { response ->
                 val source = response.body?.source() ?: throw AdapterFailure("Revyl returned an empty response.")
-                requireAdapter(!source.request(MAX_RESPONSE_BYTES + 1L), "Revyl response exceeded the 16 MiB limit.")
-                source.readByteArray()
+                requireAdapter(!source.request(maxResponseBytes + 1L), if (maxResponseBytes == MAX_RESPONSE_BYTES.toLong()) "Revyl response exceeded the 16 MiB limit." else "Revyl response exceeded its size limit.")
+                response.header("Content-Type") to source.readByteArray()
             }
         } catch (_: IOException) {
             throw AdapterFailure("Revyl transport failed, timed out, or was cancelled. An action may have executed; no adapter retry was attempted.")

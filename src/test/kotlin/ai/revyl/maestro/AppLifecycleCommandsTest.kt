@@ -162,8 +162,8 @@ class AppLifecycleCommandsTest {
         val status = runCli(arrayOf("--validate-only", "--platform", "ios", flow("- launchApp\n- setOrientation: PORTRAIT").toString()), emptyMap(), PrintStream(output), PrintStream(output))
         assertEquals(0, status, output.toString())
         assertTrue(output.toString().contains("supports_app_lifecycle, supports_precise_orientation"), output.toString())
-        val rejected = ByteArrayOutputStream()
-        assertEquals(1, runCli(arrayOf("--validate-only", "--platform", "ios", flow("- hideKeyboard").toString()), emptyMap(), PrintStream(rejected), PrintStream(rejected)))
-        assertTrue(rejected.toString().contains("Rejected command: HideKeyboardCommand"), rejected.toString())
+        val accepted = ByteArrayOutputStream()
+        assertEquals(0, runCli(arrayOf("--validate-only", "--platform", "ios", flow("- hideKeyboard").toString()), emptyMap(), PrintStream(accepted), PrintStream(accepted)))
+        assertTrue(accepted.toString().contains("supports_keyboard_control"), accepted.toString())
     }
 }

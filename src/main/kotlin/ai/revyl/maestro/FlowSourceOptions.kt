@@ -147,6 +147,12 @@ internal object FlowSourceOptions {
                     val count = if (options.isObject) options.get("charactersToErase") else options
                     if (count != null) requireAdapter(count.isIntegralNumber && count.canConvertToInt() && count.intValue() in 1..MAX_ERASE_CHARACTERS, "Erase count must be an integer from 1 to 100.")
                 }
+                "inputRandomText", "inputRandomNumber", "inputRandomEmail", "inputRandomPersonName", "inputRandomCityName", "inputRandomCountryName", "inputRandomColorName" -> {
+                    options.get("length")?.let { requireAdapter(it.isIntegralNumber && it.canConvertToInt() && it.intValue() in 1..MAX_RANDOM_INPUT_LENGTH, "Random input length must be an integer from 1 to 1000.") }
+                }
+                "travel" -> {
+                    options.get("speed")?.let { requireAdapter(it.isNumber, "Travel speed must be a literal number.") }
+                }
                 "setDarkMode" -> {
                     if (options.isObject) {
                         if (options.fieldNames().asSequence().any { it !in setOf("value", "label", "optional") }) unsupported()
