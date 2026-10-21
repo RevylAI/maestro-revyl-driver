@@ -5,7 +5,8 @@ import maestro.TreeNode
 import kotlin.math.roundToInt
 
 internal fun parseWebViewNodes(response: JsonNode): List<TreeNode> {
-    val roots = response
+    requireAdapter(response.isObject && response.size() == 1, "Revyl returned an invalid WebView hierarchy.")
+    val roots = response.path("nodes")
     requireAdapter(roots.isArray, "Revyl returned an invalid WebView hierarchy.")
     var count = 0
     fun parse(node: JsonNode, depth: Int): List<TreeNode> {

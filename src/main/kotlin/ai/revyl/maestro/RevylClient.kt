@@ -157,7 +157,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         }
         requireAdapter(capability in verifiedCapabilities, "Required worker capability has not been verified; no state was read.")
         val result = readJson(request("device-proxy/${attachedWorkflow()}/$action"))
-        requireAdapter(if (action == "webview_hierarchy") result.isArray else result.isObject, "Revyl returned an invalid device state.")
+        requireAdapter(result.isObject, "Revyl returned an invalid device state.")
         result
     }
 

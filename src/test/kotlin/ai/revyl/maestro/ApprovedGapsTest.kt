@@ -55,7 +55,7 @@ class ApprovedGapsTest {
         backend.intercept = { request ->
             when {
                 request.path.endsWith("/hierarchy") -> Reply(bytes = webNativeHierarchy.toByteArray())
-                request.path.endsWith("/webview_hierarchy") -> Reply(bytes = payload.toByteArray())
+                request.path.endsWith("/webview_hierarchy") -> Reply(bytes = (if (payload.trimStart().startsWith("[")) "{\"nodes\":$payload}" else payload).toByteArray())
                 else -> null
             }
         }
@@ -333,7 +333,7 @@ class ApprovedGapsTest {
             var deep = node
             repeat(102) { deep = """{"text":"","id":"","bounds":{"x":0,"y":0,"width":100,"height":170},"children":[$deep]}""" }
             val invalid = listOf(
-                "{}", "null", "{\"nodes\":[]}", "[null]", "[3]", "[$deep]",
+                "{}", "null", "{\"nodes\":[],\"extra\":1}", "{\"nodes\":{}}", "[null]", "[3]", "[$deep]",
             ) + listOf(
                 node.replace(bounds, """{"x":20,"y":40,"width":40}"""),
                 node.replace(bounds, """[20,40,60,80]"""),

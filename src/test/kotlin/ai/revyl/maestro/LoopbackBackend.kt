@@ -56,7 +56,7 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/keyboard" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("visible" to keyboardVisible)))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/appearance" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("appearance" to appearance)))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/airplane_mode" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("enabled" to airplaneMode)))
-                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/webview_hierarchy" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(webViewNodes))
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/webview_hierarchy" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("nodes" to webViewNodes)))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/start_screen_recording" && request.method == "POST" ->
                         Reply(bytes = json.writeValueAsBytes(mapOf("success" to true, "action" to "start_screen_recording", "latency_ms" to 1, "error" to null, "recording_id" to "rec-1")))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/stop_screen_recording" && request.method == "POST" ->
