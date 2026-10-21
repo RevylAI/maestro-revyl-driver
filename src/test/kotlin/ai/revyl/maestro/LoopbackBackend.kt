@@ -31,6 +31,7 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
     @Volatile var appearance = "light"
     @Volatile var airplaneMode = false
     var recording: ByteArray = MP4_FIXTURE
+    var webViewNodes: List<Map<String, Any>> = emptyList()
     val origin: String get() = "http://127.0.0.1:${server.address.port}"
     val environment: Map<String, String> get() = mapOf("REVYL_API_KEY" to FIXTURE_KEY, "REVYL_MAESTRO_API_URL" to origin, "REVYL_MAESTRO_FLOW_TIMEOUT_MS" to "20000")
     val mutations: List<RecordedRequest> get() = requests.filter { it.method != "GET" }
@@ -55,6 +56,7 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/keyboard" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("visible" to keyboardVisible)))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/appearance" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("appearance" to appearance)))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/airplane_mode" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("enabled" to airplaneMode)))
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/webview_hierarchy" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(webViewNodes))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/start_screen_recording" && request.method == "POST" ->
                         Reply(bytes = json.writeValueAsBytes(mapOf("success" to true, "action" to "start_screen_recording", "latency_ms" to 1, "error" to null, "recording_id" to "rec-1")))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/stop_screen_recording" && request.method == "POST" ->

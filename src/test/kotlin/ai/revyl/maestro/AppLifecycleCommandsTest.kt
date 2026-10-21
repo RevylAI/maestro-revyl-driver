@@ -28,7 +28,7 @@ class AppLifecycleCommandsTest {
     }
 
     private fun advertise(backend: LoopbackBackend) {
-        backend.healthOverrides = mapOf("supports_app_lifecycle" to true, "supports_precise_orientation" to true)
+        backend.healthOverrides = mapOf("supports_app_lifecycle" to true, "supports_precise_orientation" to true, "supports_extended_ios_permissions" to true)
     }
 
     private fun LoopbackBackend.calls(): List<Pair<String, JsonNode>> = mutations.map { it.path.substringAfterLast('/') to json.readTree(it.body) }
@@ -149,11 +149,12 @@ class AppLifecycleCommandsTest {
         }
     }
 
-    @Test fun `Android killApp stays unsupported because process death is not a force-stop`() {
+    @Test fun `Android killApp fails closed without process death capability`() {
         LoopbackBackend("android").use { backend ->
             val (status, _) = run(backend, "- killApp")
             assertEquals(1, status)
-            assertTrue(backend.requests.isEmpty())
+            assertTrue(backend.mutations.isEmpty())
+            assertTrue(backend.requests.any { it.path.endsWith("/health") })
         }
     }
 

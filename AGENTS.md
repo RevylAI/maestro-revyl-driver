@@ -14,8 +14,8 @@ agent policies do not automatically apply here.
   deliberate exception: it accepts Maestro 2.10 command semantics and delegates
   parsing, interpolation, GraalJS (including `http`), hooks, loops, retries, and
   conditions to the pinned Orchestra runtime. Compat mode still scrubs
-  `REVYL_API_KEY` and values containing the process key from JS, keeps artifacts private, gates
-  capabilities before mutation, bounds requests and total flow time, and latches
+  `REVYL_API_KEY` and values containing the process key from JS, keeps artifacts
+  private, gates capabilities before mutation, bounds requests and total flow time, and latches
   uncertain proxy responses; it never adds adapter-level replay.
 - Distinguish intentional bounded tap/key sequences from error recovery. In strict
   mode bound expanded commands, counts, delays, text, and coordinates; in compat
@@ -31,6 +31,10 @@ agent policies do not automatically apply here.
   attached session's authenticated worker health before any flow mutation.
   Missing or malformed capabilities must fail closed. Preserve requested gesture
   duration, and validate dynamically copied text before viewer input.
+- Require the process-death, WebView, and explicit extended-iOS-permission
+  capabilities before mutation. The approved iOS `all` exception uses the
+  worker's supported legacy subset when the extended-permission flag is absent;
+  never describe that result as confirming all extended permissions changed.
 - For input, discover the attached workflow's existing viewer WebSocket only via
   the authenticated backend streaming worker-connection route. Establish it before
   any flow mutation. Never accept caller-supplied worker URLs or forward API auth

@@ -12,6 +12,7 @@ import maestro.TreeNode
 import maestro.ViewHierarchy
 import maestro.device.DeviceOrientation
 import maestro.device.Platform
+import maestro.android.chromedevtools.AndroidWebViewHierarchyClient
 import okio.Sink
 import okio.buffer
 import java.io.ByteArrayInputStream
@@ -28,6 +29,7 @@ import javax.imageio.ImageIO
 
 class RevylDriver(private val client: RevylClient, private val platform: String) : Driver {
     private var closed = false
+    private var chromeDevToolsEnabled = false
     private var recording: ScreenRecording? = null
     private val recordingTimer = Executors.newSingleThreadScheduledExecutor { runnable -> Thread(runnable, "revyl-recording-deadline").apply { isDaemon = true } }
 
@@ -55,7 +57,9 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
 
     override fun contentDescriptor(excludeKeyboardElements: Boolean): TreeNode = client.guard {
         if (excludeKeyboardElements) unsupported()
-        NativeHierarchy.parse(client.read("hierarchy"), platform).root
+        val native = NativeHierarchy.parse(client.read("hierarchy"), platform).root
+        if (!chromeDevToolsEnabled || native.aggregate().none { it.attributes["class"] == "android.webkit.WebView" }) return@guard native
+        AndroidWebViewHierarchyClient.mergeHierarchies(native, parseWebViewNodes(client.readState("webview_hierarchy")))
     }
 
     override fun launchApp(appId: String, launchArguments: Map<String, Any>) = client.guard {
@@ -72,8 +76,12 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         client.act("set_permissions", mapOf("bundle_id" to appId, "permissions" to permissions))
     }
 
-    override fun setAndroidChromeDevToolsEnabled(enabled: Boolean) {
-        if (enabled) unsupported()
+    override fun setAndroidChromeDevToolsEnabled(enabled: Boolean) = client.guard {
+        if (enabled) {
+            requireAdapter(platform == "android", "DevTools WebView hierarchy is Android-only.")
+            client.requireCapability(WorkerCapability.WEBVIEW_HIERARCHY)
+        }
+        chromeDevToolsEnabled = enabled
     }
 
     override fun tap(point: Point) {
@@ -163,8 +171,8 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     }
 
     override fun killApp(appId: String) = client.guard {
-        if (platform == "android") unsupported()
-        stopApp(appId)
+        requireAppId(appId)
+        if (platform == "android") client.act("kill_app", mapOf("bundle_id" to appId, "mode" to "process_death")) else stopApp(appId)
     }
 
     override fun clearAppState(appId: String) = client.guard {

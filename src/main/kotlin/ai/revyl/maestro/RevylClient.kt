@@ -128,8 +128,8 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         viewerInput!!.inputText(text, platform == "ios")
     }
 
-    internal fun verifyCapabilities(required: Set<WorkerCapability>) = guard {
-        if (required.isEmpty()) return@guard
+    internal fun verifyCapabilities(required: Set<WorkerCapability>, optional: Set<WorkerCapability> = emptySet()) = guard {
+        if (required.isEmpty() && optional.isEmpty()) return@guard
         val health = readJson(request("device-proxy/${attachedWorkflow()}/health"))
         requireAdapter(health.isObject && health.path("status").textValue() == "ok" &&
             health.path("workflow_run_id").textValue()?.equals(attachedWorkflow(), ignoreCase = true) == true &&
@@ -139,7 +139,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         required.forEach { capability ->
             requireAdapter(health.path(capability.field).isBoolean && health.path(capability.field).booleanValue(), "The attached worker does not advertise a required command capability. No flow mutation was sent.")
         }
-        verifiedCapabilities = required
+        verifiedCapabilities = required + optional.filter { health.path(it.field).isBoolean && health.path(it.field).booleanValue() }
     }
 
     fun read(action: String): ByteArray {
@@ -152,12 +152,17 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             "keyboard" -> WorkerCapability.KEYBOARD_CONTROL
             "appearance" -> WorkerCapability.APPEARANCE_READ
             "airplane_mode" -> WorkerCapability.AIRPLANE_MODE
+            "webview_hierarchy" -> WorkerCapability.WEBVIEW_HIERARCHY
             else -> throw AdapterFailure("Unsupported proxy read.")
         }
         requireAdapter(capability in verifiedCapabilities, "Required worker capability has not been verified; no state was read.")
         val result = readJson(request("device-proxy/${attachedWorkflow()}/$action"))
-        requireAdapter(result.isObject, "Revyl returned an invalid device state.")
+        requireAdapter(if (action == "webview_hierarchy") result.isArray else result.isObject, "Revyl returned an invalid device state.")
         result
+    }
+
+    internal fun requireCapability(capability: WorkerCapability) = guard {
+        requireAdapter(capability in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")
     }
 
     internal fun stopScreenRecording(recordingId: String): ByteArray = guard {
@@ -185,7 +190,8 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             "hide_keyboard", "add_media", "set_airplane_mode", "start_screen_recording"), "Unsupported proxy mutation.")
         val capability = when (action) {
             "drag" -> WorkerCapability.EXPLICIT_DRAG_DURATION
-            "kill_app", "clear_app_state", "clear_keychain", "set_permissions" -> WorkerCapability.APP_LIFECYCLE
+            "kill_app" -> if (body["mode"] == "process_death") WorkerCapability.PROCESS_DEATH_KILL else WorkerCapability.APP_LIFECYCLE
+            "clear_app_state", "clear_keychain", "set_permissions" -> WorkerCapability.APP_LIFECYCLE
             "launch" -> WorkerCapability.APP_LIFECYCLE.takeIf { "arguments" in body }
             "set_orientation" -> WorkerCapability.PRECISE_ORIENTATION
             "hide_keyboard" -> WorkerCapability.KEYBOARD_CONTROL
@@ -195,6 +201,11 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             else -> null
         }
         requireAdapter(capability == null || capability in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")
+        if (action == "set_permissions" && attachedPlatform == "ios") {
+            val permissions = body["permissions"] as? Map<*, *> ?: throw AdapterFailure("Permissions require a map.")
+            requireAdapter(permissions.keys.none { it in extendedIosPermissions } || WorkerCapability.EXTENDED_IOS_PERMISSIONS in verifiedCapabilities,
+                "Required iOS permission capability has not been verified; no mutation was sent.")
+        }
         val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
         val responseAction = when (action) {
             "longpress" -> "long_press"

@@ -23,6 +23,9 @@ internal enum class WorkerCapability(val field: String) {
     APPEARANCE_READ("supports_appearance_read"),
     AIRPLANE_MODE("supports_airplane_mode"),
     SCREEN_RECORDING("supports_screen_recording"),
+    PROCESS_DEATH_KILL("supports_process_death_kill"),
+    EXTENDED_IOS_PERMISSIONS("supports_extended_ios_permissions"),
+    WEBVIEW_HIERARCHY("supports_webview_hierarchy"),
 }
 
 internal const val MAX_MEDIA_FILE_BYTES = 25L * 1024 * 1024
@@ -58,6 +61,10 @@ internal const val MAX_LAUNCH_ARGUMENT_VALUE_BYTES = 4_096
 private val launchArgumentKeyPattern = Regex("[A-Za-z0-9_.-]{1,128}")
 private val permissionValues = setOf("allow", "deny", "unset")
 private val sharedPermissions = setOf("all", "calendar", "camera", "contacts", "location", "microphone", "notifications", "photos")
+internal val extendedIosPermissions = setOf("camera", "notifications", "health", "homekit", "speech", "userTracking")
+
+internal fun requiresExtendedIosPermissions(permissions: Map<String, String>?): Boolean =
+    permissions?.keys?.any { it in extendedIosPermissions || it.contains("\${") } == true
 private val platformPermissions = mapOf(
     "android" to sharedPermissions + setOf("bluetooth", "phone", "sms", "storage"),
     "ios" to sharedPermissions + setOf("health", "homekit", "medialibrary", "motion", "reminders", "siri", "speech", "userTracking"),

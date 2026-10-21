@@ -43,7 +43,8 @@ internal object FlowSourceOptions {
             requireAdapter(documents.hasNextValue(), "Flow configuration is required.")
             val config = documents.nextValue()
             requireAdapter(config.isObject, "Flow configuration is required.")
-            if (config.fieldNames().asSequence().any { it !in setOf("appId", "name", "tags", "env") }) unsupported()
+            if (config.fieldNames().asSequence().any { it !in setOf("appId", "name", "tags", "env", "androidWebViewHierarchy") }) unsupported()
+            config.get("androidWebViewHierarchy")?.let { requireAdapter(it.isTextual && it.textValue() in setOf("devtools", "native"), "androidWebViewHierarchy must be devtools or native.") }
             validateTemplates(config)
             config.get("env")?.let(::validateEnv)
             requireAdapter(documents.hasNextValue(), "Flow commands are required.")

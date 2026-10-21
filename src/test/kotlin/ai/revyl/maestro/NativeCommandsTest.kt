@@ -164,7 +164,7 @@ class NativeCommandsTest {
 
     @ParameterizedTest
     @ValueSource(strings = [
-        "- pasteText", "- inputText: ''", "- killApp",
+        "- pasteText", "- inputText: ''", "- killApp: 'invalid app id'",
         "- swipe: {start: '10, 10', end: '20, 20', duration: 0}", "- swipe: {direction: UP, duration: 10001}", "- scrollUntilVisible: {element: {text: Continue}}",
         "- hideKeyboard: {optional: true}", "- pressKey: Tab", "- pressKey: Power", "- pressKey: 'Volume Up'", "- pressKey: Lock",
         "- eraseText: 0", "- eraseText: -1", "- eraseText: 101", "- eraseText: 2147483647", "- eraseText: 1.5",

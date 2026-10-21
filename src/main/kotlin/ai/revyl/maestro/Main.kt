@@ -125,11 +125,13 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
         val future = executor.submit<Boolean> {
             val validated = readFlow(invocation, environment)
             val commands = validated.commands
+            val requiredCapabilities = FlowPreflight.requiredCapabilities(commands, platform)
+            val optionalCapabilities = FlowPreflight.optionalCapabilities(commands, platform)
             FlowPreflight.prepareOutput(validated, invocation.compat)
             RevylClient(settings, deadline).use { connection ->
                 client.set(connection)
                 connection.attach(invocation.session!!, platform)
-                connection.verifyCapabilities(FlowPreflight.requiredCapabilities(commands, platform))
+                connection.verifyCapabilities(requiredCapabilities, optionalCapabilities)
                 if (FlowPreflight.requiresViewerInput(commands)) connection.establishViewerInput()
                 val driver = RevylDriver(connection, platform)
                 try {

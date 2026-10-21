@@ -287,10 +287,7 @@ object FlowPreflight {
                             command.launchArguments?.let(::requireLaunchArguments)
                         }
                         is StopAppCommand -> requireAppId(command.appId)
-                        is KillAppCommand -> {
-                            requireAppId(command.appId)
-                            if (platform == "android") unsupported()
-                        }
+                        is KillAppCommand -> requireAppId(command.appId)
                         is ClearStateCommand -> requireAppId(command.appId)
                         is ClearKeychainCommand -> Unit
                         is SetPermissionsCommand -> {
@@ -354,12 +351,7 @@ object FlowPreflight {
         try {
             return when (command) {
                 is AssertWithAICommand, is AssertNoDefectsWithAICommand, is ExtractTextWithAICommand -> unsupported()
-                is ApplyConfigurationCommand -> {
-                    if (command.config.ext["androidWebViewHierarchy"] == "devtools") unsupported()
-                    wrapper
-                }
                 is BackPressCommand -> if (platform != "android") unsupported() else wrapper
-                is KillAppCommand -> if (platform == "android") unsupported() else wrapper
                 is SetAirplaneModeCommand, is ToggleAirplaneModeCommand -> if (platform != "android") unsupported() else wrapper
                 is PressKeyCommand -> wrapper.also { requireSupportedKey(command.code, platform) }
                 is TakeScreenshotCommand -> wrapper.copy(takeScreenshotCommand = plan.screenshot(command))
@@ -398,7 +390,8 @@ object FlowPreflight {
 
     private fun validateConfig(config: MaestroConfig) {
         requireAdapter(config.appId?.matches(appIdPattern) == true, "Use a native appId, not a URL or expression.")
-        if (config.ext.isNotEmpty() || config.properties.isNotEmpty() || config.onFlowStart != null || config.onFlowComplete != null) unsupported()
+        if (config.ext.keys.any { it != "androidWebViewHierarchy" } || config.properties.isNotEmpty() || config.onFlowStart != null || config.onFlowComplete != null) unsupported()
+        config.ext["androidWebViewHierarchy"]?.let { requireAdapter(it in setOf("devtools", "native"), "androidWebViewHierarchy must be devtools or native.") }
         literal(config.name)
         config.tags?.forEach { literal(it) }
     }
@@ -413,21 +406,49 @@ object FlowPreflight {
         }
     }
 
-    internal fun requiredCapabilities(commands: List<MaestroCommand>, platform: String): Set<WorkerCapability> = allCommands(commands).mapNotNull {
-        when (val command = it.asCommand()) {
-            is SwipeCommand, is ScrollCommand, is ScrollUntilVisibleCommand -> WorkerCapability.EXPLICIT_DRAG_DURATION
-            is LaunchAppCommand -> WorkerCapability.APP_LIFECYCLE.takeIf { requiresAppLifecycle(command, platform) }
-            is StopAppCommand, is KillAppCommand, is ClearStateCommand, is SetPermissionsCommand -> WorkerCapability.APP_LIFECYCLE
-            is ClearKeychainCommand -> WorkerCapability.APP_LIFECYCLE.takeIf { platform == "ios" }
-            is SetOrientationCommand -> WorkerCapability.PRECISE_ORIENTATION
-            is HideKeyboardCommand -> WorkerCapability.KEYBOARD_CONTROL
-            is AddMediaCommand -> WorkerCapability.ADD_MEDIA
-            is ToggleDarkModeCommand, is AssertDarkModeCommand, is AssertLightModeCommand -> WorkerCapability.APPEARANCE_READ
-            is SetAirplaneModeCommand, is ToggleAirplaneModeCommand -> WorkerCapability.AIRPLANE_MODE
-            is StartRecordingCommand, is StopRecordingCommand -> WorkerCapability.SCREEN_RECORDING
-            else -> null
+    internal fun requiredCapabilities(commands: List<MaestroCommand>, platform: String): Set<WorkerCapability> = buildSet {
+        allCommands(commands).forEach { wrapper ->
+            val command = wrapper.asCommand()
+            when (command) {
+                is KillAppCommand -> if (platform == "android") add(WorkerCapability.PROCESS_DEATH_KILL)
+                is LaunchAppCommand -> if (platform == "ios" && requiresExtendedIosPermissions(command.permissions)) add(WorkerCapability.EXTENDED_IOS_PERMISSIONS)
+                is SetPermissionsCommand -> if (platform == "ios" && requiresExtendedIosPermissions(command.permissions)) add(WorkerCapability.EXTENDED_IOS_PERMISSIONS)
+                else -> Unit
+            }
+            val config = wrapper.applyConfigurationCommand?.config ?: wrapper.runFlowCommand?.config ?: wrapper.retryCommand?.config
+            if (config?.ext?.get("androidWebViewHierarchy") == "devtools") {
+                requireAdapter(platform == "android", "DevTools WebView hierarchy is Android-only.")
+                add(WorkerCapability.WEBVIEW_HIERARCHY)
+            }
+            val capability = when (command) {
+                is SwipeCommand, is ScrollCommand, is ScrollUntilVisibleCommand -> WorkerCapability.EXPLICIT_DRAG_DURATION
+                is LaunchAppCommand -> WorkerCapability.APP_LIFECYCLE.takeIf { requiresAppLifecycle(command, platform) }
+                is StopAppCommand, is ClearStateCommand, is SetPermissionsCommand -> WorkerCapability.APP_LIFECYCLE
+                is KillAppCommand -> WorkerCapability.APP_LIFECYCLE.takeIf { platform == "ios" }
+                is ClearKeychainCommand -> WorkerCapability.APP_LIFECYCLE.takeIf { platform == "ios" }
+                is SetOrientationCommand -> WorkerCapability.PRECISE_ORIENTATION
+                is HideKeyboardCommand -> WorkerCapability.KEYBOARD_CONTROL
+                is AddMediaCommand -> WorkerCapability.ADD_MEDIA
+                is ToggleDarkModeCommand, is AssertDarkModeCommand, is AssertLightModeCommand -> WorkerCapability.APPEARANCE_READ
+                is SetAirplaneModeCommand, is ToggleAirplaneModeCommand -> WorkerCapability.AIRPLANE_MODE
+                is StartRecordingCommand, is StopRecordingCommand -> WorkerCapability.SCREEN_RECORDING
+                else -> null
+            }
+            capability?.let(::add)
         }
-    }.toSet()
+    }
+
+    internal fun optionalCapabilities(commands: List<MaestroCommand>, platform: String): Set<WorkerCapability> {
+        if (platform != "ios") return emptySet()
+        return if (allCommands(commands).any {
+            when (val command = it.asCommand()) {
+                is LaunchAppCommand -> command.permissions?.containsKey("all") != false
+                is SetPermissionsCommand -> "all" in command.permissions
+                is ClearStateCommand -> true
+                else -> false
+            }
+        }) setOf(WorkerCapability.EXTENDED_IOS_PERMISSIONS) else emptySet()
+    }
 
     private fun requiresAppLifecycle(command: LaunchAppCommand, platform: String): Boolean =
         command.stopApp != false || command.permissions?.isNotEmpty() != false || command.clearState == true ||

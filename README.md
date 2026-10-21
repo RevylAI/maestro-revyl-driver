@@ -90,9 +90,9 @@ output names use simple relative segments without extensions or parent traversal
 Screenshot references must stay inside the flow's Maestro workspace (the nearest
 ancestor containing config.yaml, otherwise the flow directory); references are
 copied privately before comparison so Maestro's diff images do not modify them.
-Media paths remain literal, validated local files. Web/Chrome DevTools, AI commands,
-unsupported keys, Android killApp process-death simulation, and iOS airplane mode
-remain unsupported.
+Media paths remain literal, validated local files. Android WebView DevTools and
+process-death kill require their worker capabilities below. Full browser/AI
+commands, unsupported keys, and iOS airplane mode remain unsupported.
 
 ## Strict-mode supported commands
 
@@ -355,11 +355,31 @@ is targeted at an explicit app ID; nothing acts on whichever app is in front.
 | --- | --- | --- |
 | `launchApp` (any form other than `stopApp: false` with `permissions: {}`) | `supports_app_lifecycle` | Follows Maestro's order: `clearKeychain`, `clearState`, `setPermissions` (default `all: allow`), then a targeted stop when `stopApp` is not false, then launch. `arguments` accepts 1–64 entries with names of 1–128 `[A-Za-z0-9_.-]` characters and string (≤4 KiB, no control characters), integer, finite number, or boolean values. |
 | `stopApp` | `supports_app_lifecycle` | Targeted terminate of the flow's or the named app. |
-| `killApp` | `supports_app_lifecycle` | iOS only, as a targeted terminate. Android's `killApp` simulates system process death, which a force-stop does not reproduce, so it is rejected. |
+| `killApp` | `supports_app_lifecycle` on iOS; `supports_process_death_kill` on Android | iOS targeted terminate. Android uses `kill_app` with `mode: process_death` to simulate system process death rather than force-stop. |
 | `clearState` | `supports_app_lifecycle` | Resets the app's data, then resets all its permissions to `unset` like Maestro. Not available on physical iOS. |
 | `clearKeychain` | `supports_app_lifecycle` on iOS | Resets the simulator keychain. A local no-op on Android, matching Maestro's Android driver. |
 | `setPermissions` | `supports_app_lifecycle` | Maestro permission names with `allow`, `deny`, or `unset`. Android also accepts fully qualified `*.permission.*` names. Names that do not exist on the platform fail preflight. |
 | `setOrientation` | `supports_precise_orientation` | `PORTRAIT`, `LANDSCAPE_LEFT`, `LANDSCAPE_RIGHT`, or `UPSIDE_DOWN`, applied exactly or not at all. |
+
+Explicit iOS `camera`, `notifications`, `health`, `homekit`, `speech`, and
+`userTracking` names additionally require `supports_extended_ios_permissions`.
+For iOS `all` (including Maestro's default launch permissions), that flag is
+optional: missing, false, or malformed means the worker's supported legacy subset,
+not a claim that every extended permission changed. A strict true flag enables
+the worker's extended set. The driver still forwards `{all: allow|deny|unset}`;
+the worker owns platform expansion. Explicit named requests never silently degrade.
+
+`androidWebViewHierarchy: devtools` is supported in both modes and requires
+`supports_webview_hierarchy` before any mutation. This is the only related flow
+configuration key used by the pinned Maestro 2.10 Orchestra. When the native tree
+contains `android.webkit.WebView`, the driver reads `webview_hierarchy` as a JSON
+list of `{text, id, bounds: {x, y, width, height}, children}` in screen pixels,
+converts bounds to Maestro rectangles, and delegates merging to Maestro's own
+Android WebView merge helper. Native text and IDs are preserved; additional DOM
+text/IDs become normal selectors. Empty valid lists keep the native tree; malformed
+or uncertain reads are terminal rather than silently returning native-only results.
+Strict mode still rejects `scrollUntilVisible` and scripts independently of this
+configuration; use compat mode for upstream flows that require those semantics.
 
 ## Deployment-gated device features
 
@@ -409,7 +429,7 @@ build/install/revyl-maestro/bin/revyl-maestro --validate-only --platform ios flo
 
 ## Remaining limits and cleanup
 
-Proxy and web-view DevTools operations remain unsupported. AI operations remain
+Proxy and full-browser operations remain unsupported. AI operations remain
 unsupported. Keyboard dismissal, media, recording, airplane mode, appearance
 reads, screenshot comparison/cropping, random input, and travel are wired to the
 worker contract and are available when the attached worker advertises its strict

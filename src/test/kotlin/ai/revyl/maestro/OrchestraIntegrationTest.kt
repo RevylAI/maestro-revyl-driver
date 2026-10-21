@@ -121,7 +121,7 @@ class OrchestraIntegrationTest {
     @ParameterizedTest
     @ValueSource(strings = [
         "- inputText: ''",
-        "- killApp",
+        "- killApp: 'invalid app id'",
         "- scrollUntilVisible: {element: {text: Continue}}",
         "- swipe: {direction: UP, duration: 0}",
         "- hideKeyboard: {optional: true}",
@@ -162,7 +162,7 @@ class OrchestraIntegrationTest {
         "onFlowStart: [{tapOn: Continue}]",
         "onFlowComplete: [{inputText: secret}]",
         "env: {VALUE: '\${REVYL_API_KEY}'}",
-        "androidWebViewHierarchy: devtools",
+        "androidWebViewHierarchy: unsupported-mode",
         "properties: {foo: bar}",
         "apiKey: secret",
     ])
