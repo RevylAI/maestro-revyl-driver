@@ -253,11 +253,10 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         visible.booleanValue()
     }
     override fun swipe(start: Point, end: Point, durationMs: Long) = client.guard {
-        requireSwipeDuration(durationMs)
+        requireSwipeDuration(durationMs, platform)
         val info = deviceInfo()
         requireAdapter(start != end && listOf(start, end).all { it.x in 0 until info.widthGrid && it.y in 0 until info.heightGrid }, "Swipe endpoints must differ and lie inside the native viewport.")
         if (platform == "web") {
-            requireAdapter(durationMs <= 5_000, "Web drag duration must not exceed 5000 milliseconds.")
             return@guard client.webAct("drag", mapOf("start_x" to (start.x.toLong() * info.widthPixels / info.widthGrid).toInt(), "start_y" to (start.y.toLong() * info.heightPixels / info.heightGrid).toInt(), "end_x" to (end.x.toLong() * info.widthPixels / info.widthGrid).toInt(), "end_y" to (end.y.toLong() * info.heightPixels / info.heightGrid).toInt(), "duration_ms" to durationMs))
         }
         client.act("drag", mapOf("start_x" to start.x, "start_y" to start.y, "end_x" to end.x, "end_y" to end.y, "duration_ms" to durationMs))

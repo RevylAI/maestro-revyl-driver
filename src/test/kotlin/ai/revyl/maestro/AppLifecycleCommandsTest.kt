@@ -116,6 +116,20 @@ class AppLifecycleCommandsTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `Android medialibrary permission matches Maestro translation`(compat: Boolean) {
+        LoopbackBackend("android").use { backend ->
+            advertise(backend)
+            val output = ByteArrayOutputStream()
+            val options = if (compat) arrayOf("--maestro-compat") else emptyArray()
+            val status = runCli(options + arrayOf("--session", SESSION, "--platform", "android",
+                flow("- setPermissions: {permissions: {medialibrary: allow}}").toString()), backend.environment, PrintStream(output), PrintStream(output))
+            assertEquals(0, status, output.toString())
+            assertEquals("allow", backend.calls().single().second.path("permissions").path("medialibrary").textValue())
+        }
+    }
+
     @Test fun `iOS killApp terminates the targeted app`() {
         LoopbackBackend("ios").use { backend ->
             advertise(backend)

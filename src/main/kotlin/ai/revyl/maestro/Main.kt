@@ -117,9 +117,12 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
             .readTimeout(settings.timeoutMs, TimeUnit.MILLISECONDS)
             .writeTimeout(settings.timeoutMs, TimeUnit.MILLISECONDS)
             .addInterceptor { chain ->
-                requireAdapter(!scriptsClosed.get() && !Thread.currentThread().isInterrupted && System.nanoTime() < deadline, "Flow execution timed out or was cancelled.")
-                chain.call().timeout().timeout(minOf(settings.timeoutMs, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)), TimeUnit.MILLISECONDS)
-                chain.proceed(chain.request())
+                val connection = client.get() ?: throw AdapterFailure("No Revyl session is attached.")
+                connection.guard {
+                    requireAdapter(!scriptsClosed.get() && !Thread.currentThread().isInterrupted && System.nanoTime() < deadline, "Flow execution timed out or was cancelled.")
+                    chain.call().timeout().timeout(minOf(settings.timeoutMs, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)), TimeUnit.MILLISECONDS)
+                    chain.proceed(chain.request())
+                }
             }
             .build()
         val future = executor.submit<Boolean> {
@@ -141,10 +144,13 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
                             Orchestra(
                                 Maestro(driver),
                                 httpClient = scriptHttp,
-                                jsEngineFactory = { if (invocation.compat) CompatJsEngine(GraalJsEngine(scriptHttp ?: OkHttpClient(), platform), settings.apiKey, validated.dynamicPaths) else GraalJsEngine(platform = platform) },
+                                jsEngineFactory = { if (invocation.compat) CompatJsEngine(GraalJsEngine(scriptHttp ?: OkHttpClient(), platform), settings.apiKey, validated.dynamicPaths, connection::recordFailure) else GraalJsEngine(platform = platform) },
                                 onCommandStart = { _, _ -> connection.verifyHealthy() },
                                 onCommandComplete = { _, _ -> connection.verifyHealthy() },
-                                onCommandFailed = { _, _, failure -> throw failure },
+                                onCommandFailed = { _, _, failure ->
+                                    if (failure is AdapterFailure) connection.recordFailure(failure)
+                                    throw failure
+                                },
                             ).runFlow(commands)
                         }
                     }

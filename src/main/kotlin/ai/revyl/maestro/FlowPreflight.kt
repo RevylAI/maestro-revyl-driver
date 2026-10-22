@@ -103,7 +103,7 @@ private class ArtifactPlan(private val workspaceRoot: Path?, private val compat:
     }
 
     fun reference(command: AssertScreenshotCommand): AssertScreenshotCommand {
-        if (compat) return command.copy(path = dynamic(command.path) { value ->
+        if (compat && command.path.contains("\${")) return command.copy(path = dynamic(command.path) { value ->
             val resolved = resolvedReference(command.copy(path = value))
             val target = Path.of(resolved.path)
             referenceCopies[target]?.let { source -> FlowPreflight.prepareOutput(ValidatedFlow(emptyList(), mapOf(target to source)), true) }
@@ -260,7 +260,7 @@ object FlowPreflight {
                             requireAdapter(clipboardSafeToPaste, "pasteText requires valid text on every possible preceding clipboard path.")
                         }
                         is SwipeCommand -> {
-                            requireSwipeDuration(command.duration)
+                            requireSwipeDuration(command.duration, platform)
                             timeout(command.waitToSettleTimeoutMs?.toString())
                             if (command.relativePoint != null) unsupported()
                             command.elementSelector?.let(::selector)
@@ -289,7 +289,10 @@ object FlowPreflight {
                             requireLocation(latitude, longitude)
                         }
                         is SetDarkModeCommand -> Unit
-                        is OpenLinkCommand -> requirePlainLink(command.link, command.autoVerify != false, command.browser != false)
+                        is OpenLinkCommand -> {
+                            requirePlainLink(command.link, command.autoVerify != false, command.browser != false)
+                            if (platform == "web") requireAppTarget(command.link, platform)
+                        }
                         is LaunchAppCommand -> {
                             requireAppTarget(command.appId, platform)
                             command.permissions?.let { if (platform != "web") requirePermissions(it, platform) }
@@ -363,6 +366,10 @@ object FlowPreflight {
                 is BackPressCommand -> if (platform !in setOf("android", "web")) unsupported() else wrapper
                 is SetAirplaneModeCommand, is ToggleAirplaneModeCommand -> if (platform != "android") unsupported() else wrapper
                 is PressKeyCommand -> wrapper.also { requireSupportedKey(command.code, platform) }
+                is OpenLinkCommand -> wrapper.also {
+                    if (platform == "web" && !command.link.contains("\${")) requireAppTarget(command.link, platform)
+                }
+                is SwipeCommand -> wrapper.also { requireSwipeDuration(command.duration, platform) }
                 is TakeScreenshotCommand -> wrapper.copy(takeScreenshotCommand = plan.screenshot(command))
                 is StartRecordingCommand -> wrapper.copy(startRecordingCommand = plan.recording(command))
                 is AssertScreenshotCommand -> wrapper.copy(assertScreenshotCommand = plan.reference(command))

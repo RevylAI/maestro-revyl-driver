@@ -364,6 +364,46 @@ class MaestroCompatTest {
         } finally { Files.deleteIfExists(outside) }
     }
 
+    @Test fun `literal screenshot references fail preflight before attachment in both modes`() {
+        val outside = temporary.parent.resolve("${UUID.randomUUID()}.png")
+        Files.write(outside, png(1, 1))
+        val oversized = temporary.resolve("oversized.png")
+        java.io.RandomAccessFile(oversized.toFile(), "rw").use { it.setLength(MAX_MEDIA_FILE_BYTES + 1) }
+        val link = temporary.resolve("outside.png")
+        Files.createSymbolicLink(link, outside)
+        try {
+            for (reference in listOf("missing.png", "oversized.png", "../${outside.fileName}", "outside.png")) {
+                for (compat in listOf(false, true)) {
+                    LoopbackBackend().use { backend ->
+                        val source = flow("- pressKey: Enter\n- assertScreenshot: $reference")
+                        val flags = if (compat) arrayOf("--maestro-compat") else emptyArray()
+                        for (mode in listOf(arrayOf("--validate-only"), arrayOf("--session", SESSION))) {
+                            val output = ByteArrayOutputStream()
+                            val status = runCli(flags + mode + arrayOf("--platform", "android", source.toString()), backend.environment, PrintStream(output), PrintStream(output))
+                            assertEquals(1, status, output.toString())
+                            assertTrue(backend.requests.isEmpty(), reference)
+                        }
+                    }
+                }
+            }
+        } finally { Files.deleteIfExists(outside) }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["takeScreenshot", "assertScreenshot", "startRecording"])
+    fun `dynamic artifact failure latches before compatibility completion hooks`(command: String) {
+        LoopbackBackend().use { backend ->
+            backend.healthOverrides = mapOf("supports_screen_recording" to true)
+            val source = flow("""
+                - evalScript: ${'$'}{output.name = '../escape'}
+                - $command: ${'$'}{output.name}
+            """.trimIndent(), "appId: com.example\nonFlowComplete: [{pressKey: Enter}]")
+            val (status, output) = run(backend, source)
+            assertEquals(1, status, output)
+            assertTrue(backend.mutations.isEmpty(), output)
+        }
+    }
+
     @Test fun `compat validate-only accepts loops whose expanded count exceeds strict-mode limit`() {
         val path = flow("""
             - repeat:

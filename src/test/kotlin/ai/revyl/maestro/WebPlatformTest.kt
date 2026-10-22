@@ -388,6 +388,25 @@ class WebPlatformTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = ["- openLink: sampleapp://screen/next", "- swipe: {direction: UP, duration: 5001}"])
+    fun `web literal links and swipes are validated before attachment`(command: String) {
+        for (compat in listOf(false, true)) {
+            LoopbackBackend("web").use { backend ->
+                serveWeb(backend)
+                val source = temporary.resolve("${UUID.randomUUID()}.yaml")
+                Files.writeString(source, "url: $entryUrl\n---\n- pressKey: Enter\n$command\n")
+                val flags = if (compat) arrayOf("--maestro-compat") else emptyArray()
+                for (mode in listOf(arrayOf("--validate-only"), arrayOf("--session", SESSION))) {
+                    val output = ByteArrayOutputStream()
+                    val status = runCli(flags + mode + arrayOf("--platform", "web", source.toString()), backend.environment, PrintStream(output), PrintStream(output))
+                    assertEquals(1, status, output.toString())
+                    assertTrue(backend.requests.isEmpty())
+                }
+            }
+        }
+    }
+
     @Test fun `compat JavaScript produces web input through the real Orchestra engine`() {
         LoopbackBackend("web").use { backend ->
             serveWeb(backend)

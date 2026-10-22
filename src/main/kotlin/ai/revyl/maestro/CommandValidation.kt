@@ -61,7 +61,7 @@ internal const val MAX_LAUNCH_ARGUMENT_VALUE_BYTES = 4_096
 
 private val launchArgumentKeyPattern = Regex("[A-Za-z0-9_.-]{1,128}")
 private val permissionValues = setOf("allow", "deny", "unset")
-private val sharedPermissions = setOf("all", "calendar", "camera", "contacts", "location", "microphone", "notifications", "photos")
+private val sharedPermissions = setOf("all", "calendar", "camera", "contacts", "location", "medialibrary", "microphone", "notifications", "photos")
 internal val extendedIosPermissions = setOf("camera", "notifications", "health", "homekit", "speech", "userTracking")
 
 internal fun requiresExtendedIosPermissions(permissions: Map<String, String>?): Boolean =
@@ -124,8 +124,9 @@ internal fun requireFocusedText(text: String) {
     requireAdapter(text.toByteArray(Charsets.UTF_8).size <= MAX_FOCUSED_TEXT_BYTES, "Focused text input exceeds the 16 KiB limit.")
 }
 
-internal fun requireSwipeDuration(durationMs: Long) {
-    requireAdapter(durationMs in 1..MAX_SWIPE_DURATION_MS, "Swipe duration must be an integer from 1 to 10000 milliseconds.")
+internal fun requireSwipeDuration(durationMs: Long, platform: String? = null) {
+    val limit = if (platform == "web") 5_000L else MAX_SWIPE_DURATION_MS
+    requireAdapter(durationMs in 1..limit, "Swipe duration must be an integer from 1 to $limit milliseconds.")
 }
 
 internal fun requireSupportedKey(code: KeyCode, platform: String) {

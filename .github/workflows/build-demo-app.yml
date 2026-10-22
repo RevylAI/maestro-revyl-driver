@@ -54,7 +54,34 @@ jobs:
 
       - name: Select Xcode SDK for pinned connectivity plugin
         if: matrix.platform == 'ios'
-        run: sudo xcode-select --switch /Applications/Xcode_26.1.1.app/Contents/Developer
+        run: |
+          developer_dir="$(python3 - <<'PY'
+          import plistlib
+          import re
+          import sys
+          from pathlib import Path
+          candidates = []
+          for app in Path('/Applications').glob('Xcode*.app'):
+              if 'beta' in app.name.lower():
+                  continue
+              metadata = app / 'Contents/version.plist'
+              if not metadata.is_file():
+                  continue
+              with metadata.open('rb') as source:
+                  version = plistlib.load(source).get('CFBundleShortVersionString', '')
+              if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version):
+                  continue
+              parts = tuple(map(int, version.split('.')))
+              parts += (0,) * (3 - len(parts))
+              if (26, 1, 1) <= parts < (27, 0, 0):
+                  candidates.append((parts, str(app.resolve() / 'Contents/Developer')))
+          if not candidates:
+              sys.exit('No installed stable Xcode >=26.1.1 and <27; required by the pinned Flutter/plugin build.')
+          print(max(candidates)[1])
+          PY
+          )"
+          sudo xcode-select --switch "$developer_dir"
+          xcodebuild -version
 
       - name: Resolve Flutter dependencies
         run: flutter pub get

@@ -91,6 +91,10 @@ output names use simple relative segments without extensions or parent traversal
 Screenshot references must stay inside the flow's Maestro workspace (the nearest
 ancestor containing config.yaml, otherwise the flow directory); references are
 copied privately before comparison so Maestro's diff images do not modify them.
+Literal screenshot references are checked for existence, containment and size in
+both modes before attachment; only expression-derived paths defer validation.
+Adapter failures during expression/artifact resolution also latch terminal failure
+before completion hooks can issue device actions.
 Media paths remain literal, validated local files. Android WebView DevTools and
 process-death kill require their worker capabilities below. Web flows use the
 web contract below; AI commands, unsupported keys, and iOS airplane mode

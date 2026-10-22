@@ -50,9 +50,12 @@ release. Both platform app IDs are `com.example.example`.
 
 ## iOS packaging and compatibility
 
-The iOS job selects the installed Xcode 26.1.1 SDK because the upstream
+The iOS job selects the newest installed stable Xcode >=26.1.1 and <27 because the upstream
 `connectivity_plus` dependency uses `NWPath.isUltraConstrained`, which is not
-available in the runner's default Xcode 16 SDK. The selected Xcode version and
+available in the runner's default Xcode 16 SDK. It reads installed application
+metadata rather than assuming an exact versioned path and fails clearly if no
+compatible SDK exists. Xcode 27 is not assumed compatible with this pinned Flutter
+fixture. The selected Xcode version and
 actual executable architectures are recorded in `BUILD-INFO.txt`.
 
 The iOS artifact is a **debug simulator build**, not an IPA and not installable on

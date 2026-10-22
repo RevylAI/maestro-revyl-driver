@@ -278,10 +278,14 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         requireAdapter(!closed.get(), "The local Revyl client is closed.")
     }
 
+    internal fun recordFailure(failure: AdapterFailure) {
+        terminalFailure.compareAndSet(null, failure)
+    }
+
     fun <T> guard(action: () -> T): T {
         verifyHealthy()
         try { return action() } catch (failure: AdapterFailure) {
-            terminalFailure.compareAndSet(null, failure)
+            recordFailure(failure)
             throw failure
         }
     }
