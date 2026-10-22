@@ -52,6 +52,10 @@ jobs:
           channel: stable
           flutter-version-file: maestro-upstream/e2e/demo_app/pubspec.yaml
 
+      - name: Select Xcode SDK for pinned connectivity plugin
+        if: matrix.platform == 'ios'
+        run: sudo xcode-select --switch /Applications/Xcode_26.1.1.app/Contents/Developer
+
       - name: Resolve Flutter dependencies
         run: flutter pub get
 

@@ -50,6 +50,11 @@ release. Both platform app IDs are `com.example.example`.
 
 ## iOS packaging and compatibility
 
+The iOS job selects the installed Xcode 26.1.1 SDK because the upstream
+`connectivity_plus` dependency uses `NWPath.isUltraConstrained`, which is not
+available in the runner's default Xcode 16 SDK. The selected Xcode version and
+actual executable architectures are recorded in `BUILD-INFO.txt`.
+
 The iOS artifact is a **debug simulator build**, not an IPA and not installable on
 a physical iPhone. The workflow selects `macos-15` rather than a moving
 `macos-latest` label. The actual Runner executable architectures and Xcode version
