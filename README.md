@@ -1,7 +1,8 @@
 # Revyl Maestro driver
 
-Run supported native Maestro flows against an **existing Revyl Android or iOS
-session**. This runner embeds Maestro's parser and execution
+Run supported Maestro flows against an **existing authorized Revyl session**.
+Android/iOS commands and the proposed gated web contract are described below.
+This runner embeds Maestro's parser and execution
 engine; it is not a plugin for stock `maestro test`. Synthetic-app flows have
 verified native assertions, taps and repeated taps, long press, focused Backspace
 deletion, Enter, Home, appearance changes, and plain deep links on staging Android
@@ -91,8 +92,9 @@ Screenshot references must stay inside the flow's Maestro workspace (the nearest
 ancestor containing config.yaml, otherwise the flow directory); references are
 copied privately before comparison so Maestro's diff images do not modify them.
 Media paths remain literal, validated local files. Android WebView DevTools and
-process-death kill require their worker capabilities below. Full browser/AI
-commands, unsupported keys, and iOS airplane mode remain unsupported.
+process-death kill require their worker capabilities below. Web flows use the
+proposed contract below; AI commands, unsupported keys, and iOS airplane mode
+remain unsupported.
 
 ## Strict-mode supported commands
 
@@ -113,6 +115,38 @@ commands, unsupported keys, and iOS airplane mode remain unsupported.
 | `assertScreenshot`, `takeScreenshot.cropOn` | Maestro compares/crops locally using the driver's screenshot. References are path-contained and copied privately; output names use simple relative segments without extensions. |
 | `hideKeyboard`, `addMedia`, appearance reads, airplane mode, recording | Deployment-gated by the feature flags below. |
 | `openLink` | Plain absolute HTTP(S) or app-scheme links, with `autoVerify: false` and `browser: false` (also the scalar form's defaults). Uses system URL routing without forcing a target app. URLs are limited to 8 KiB UTF-8; relative, control-character, embedded-credential, `file:`, `data:`, `javascript:`, and `intent:` links are rejected. |
+
+## Web platform (proposed worker contract)
+
+`--platform web` accepts Maestro `url:` flow headers or HTTP(S) `appId:` targets
+in both modes. It reuses the parser/Orchestra and attaches to an existing session;
+it never launches Selenium/Chrome or exposes the runtime's private CDP endpoint.
+**Current workers do not advertise the required `supports_maestro_web` flag, so
+web execution fails closed before navigation/input.** Loopback tests are contract
+coverage, not live web support. Worker/backend additions are specified in
+[`docs/web-worker-contract.md`](docs/web-worker-contract.md).
+
+The mapping includes DOM text/ID/CSS selectors, screenshots, navigation/back,
+state-preserving launch, named-origin reset, focused append/HTML date input,
+scroll/drag, keys and Maestro web synthetic/offscreen taps. Stop/kill, permissions,
+keychain and keyboard dismissal are local no-ops like Maestro web; closing the CLI
+does not stop the browser/session. Mobile-only location, travel, orientation,
+appearance, airplane mode, media and recording are rejected. API-key secrecy,
+private artifacts, deadline bounds and terminal uncertain-response latching apply
+unchanged. The missing DOM/input routes must implement iframe and widget semantics
+before advertising the capability; visual grounding is not a replacement.
+
+```bash
+build/install/revyl-maestro/bin/revyl-maestro --maestro-compat --validate-only --platform web flow.yaml
+conformance/maestro-e2e.sh --maestro-compat --platform web --workspace web
+```
+
+The pinned Maestro workspace contains **13**, not 14, tagged web flows. Offline
+preflight accepts 13/13 in strict and compat mode; this does not prove live page
+behavior. Live fixture runs require a worker-reachable fixture base rather than
+assuming the harness machine's localhost is the browser's localhost. See
+[`docs/web-conformance.md`](docs/web-conformance.md) for Maestro's fixture server
+and the harness's `--fixtures-url` option.
 
 For example, with a text field **already focused**:
 
@@ -372,8 +406,8 @@ the worker owns platform expansion. Explicit named requests never silently degra
 `androidWebViewHierarchy: devtools` is supported in both modes and requires
 `supports_webview_hierarchy` before any mutation. This is the only related flow
 configuration key used by the pinned Maestro 2.10 Orchestra. When the native tree
-contains `android.webkit.WebView`, the driver reads `webview_hierarchy` as a JSON
-list of `{text, id, bounds: {x, y, width, height}, children}` in screen pixels,
+contains `android.webkit.WebView`, the driver reads `webview_hierarchy` as
+`{nodes: [...]}`, each node `{text, id, bounds: {x, y, width, height}, children}` in screen pixels,
 converts bounds to Maestro rectangles, and delegates merging to Maestro's own
 Android WebView merge helper. Native text and IDs are preserved; additional DOM
 text/IDs become normal selectors. Empty valid lists keep the native tree; malformed
@@ -429,8 +463,8 @@ build/install/revyl-maestro/bin/revyl-maestro --validate-only --platform ios flo
 
 ## Remaining limits and cleanup
 
-Proxy and full-browser operations remain unsupported. AI operations remain
-unsupported. Keyboard dismissal, media, recording, airplane mode, appearance
+Proxy, arbitrary browser/CDP access and AI operations remain unsupported. Web
+flows require the proposed contract above. Keyboard dismissal, media, recording, airplane mode, appearance
 reads, screenshot comparison/cropping, random input, and travel are wired to the
 worker contract and are available when the attached worker advertises its strict
 capability flags. The worker's

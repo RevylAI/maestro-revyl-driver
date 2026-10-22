@@ -35,6 +35,12 @@ agent policies do not automatically apply here.
   capabilities before mutation. The approved iOS `all` exception uses the
   worker's supported legacy subset when the extended-permission flag is absent;
   never describe that result as confirming all extended permissions changed.
+- Web sessions require the strict `supports_maestro_web` capability before any
+  mutation. Keep proposed web routes explicitly documented as undeployed until
+  worker/backend support is verified. Use typed authenticated backend routes,
+  never private CDP addresses, a locally launched browser, or visual grounding as
+  a substitute for Maestro's DOM/CSS semantics. Browser closing and mobile-only
+  operations must not acquire accidental session-wide effects.
 - For input, discover the attached workflow's existing viewer WebSocket only via
   the authenticated backend streaming worker-connection route. Establish it before
   any flow mutation. Never accept caller-supplied worker URLs or forward API auth

@@ -26,6 +26,7 @@ internal enum class WorkerCapability(val field: String) {
     PROCESS_DEATH_KILL("supports_process_death_kill"),
     EXTENDED_IOS_PERMISSIONS("supports_extended_ios_permissions"),
     WEBVIEW_HIERARCHY("supports_webview_hierarchy"),
+    MAESTRO_WEB("supports_maestro_web"),
 }
 
 internal const val MAX_MEDIA_FILE_BYTES = 25L * 1024 * 1024
@@ -72,6 +73,12 @@ private val platformPermissions = mapOf(
 
 internal fun requireAppId(appId: String) {
     requireAdapter(appIdPattern.matches(appId), "Use a literal native app ID.")
+}
+
+internal fun requireAppTarget(appId: String, platform: String) {
+    if (platform != "web") return requireAppId(appId)
+    requirePlainLink(appId, false, false)
+    requireAdapter(URI(appId).scheme.lowercase() in setOf("http", "https"), "Web targets must be absolute HTTP(S) URLs without credentials.")
 }
 
 private val androidPermissionPattern = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*\\.permission\\.[A-Z][A-Z0-9_]{0,127}")
@@ -122,7 +129,7 @@ internal fun requireSwipeDuration(durationMs: Long) {
 }
 
 internal fun requireSupportedKey(code: KeyCode, platform: String) {
-    if (code !in setOf(KeyCode.ENTER, KeyCode.BACKSPACE, KeyCode.HOME) && !(code == KeyCode.BACK && platform == "android")) unsupported()
+    if (code !in setOf(KeyCode.ENTER, KeyCode.BACKSPACE, KeyCode.HOME) && !(code == KeyCode.BACK && platform in setOf("android", "web"))) unsupported()
 }
 
 internal fun requireLocation(latitude: Double, longitude: Double) {

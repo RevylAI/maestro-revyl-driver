@@ -43,7 +43,7 @@ internal object FlowSourceOptions {
             requireAdapter(documents.hasNextValue(), "Flow configuration is required.")
             val config = documents.nextValue()
             requireAdapter(config.isObject, "Flow configuration is required.")
-            if (config.fieldNames().asSequence().any { it !in setOf("appId", "name", "tags", "env", "androidWebViewHierarchy") }) unsupported()
+            if (config.fieldNames().asSequence().any { it !in setOf("appId", "url", "name", "tags", "env", "androidWebViewHierarchy") }) unsupported()
             config.get("androidWebViewHierarchy")?.let { requireAdapter(it.isTextual && it.textValue() in setOf("devtools", "native"), "androidWebViewHierarchy must be devtools or native.") }
             validateTemplates(config)
             config.get("env")?.let(::validateEnv)
@@ -78,7 +78,7 @@ internal object FlowSourceOptions {
                             requireAdapter(condition.isObject && !condition.isEmpty, "runFlow conditions require visible, notVisible, or platform.")
                             if (condition.fieldNames().asSequence().any { it !in setOf("visible", "notVisible", "platform", "label") }) unsupported()
                             requireAdapter(listOf("visible", "notVisible", "platform").any(condition::has), "runFlow conditions require visible, notVisible, or platform.")
-                            condition.get("platform")?.let { requireAdapter(it.isTextual && it.textValue().lowercase() in setOf("android", "ios"), "Condition platform must be android or ios.") }
+                            condition.get("platform")?.let { requireAdapter(it.isTextual && it.textValue().lowercase() in setOf("android", "ios", "web"), "Condition platform must be android, ios, or web.") }
                             condition.get("label")?.let { requireAdapter(it.isTextual && !it.textValue().contains("\${"), "Condition labels must be literal text.") }
                             listOf("visible", "notVisible").forEach { name ->
                                 condition.get(name)?.let {

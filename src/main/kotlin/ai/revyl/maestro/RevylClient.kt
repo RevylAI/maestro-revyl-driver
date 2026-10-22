@@ -91,7 +91,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
     fun attach(sessionId: String, platform: String) = guard {
         requireAdapter(workflowRunId == null, "The local client is already attached.")
         requireAdapter(uuidPattern.matches(sessionId), "Session must be a canonical UUID.")
-        requireAdapter(platform in setOf("android", "ios"), "Platform must be android or ios.")
+        requireAdapter(platform in setOf("android", "ios", "web"), "Platform must be android, ios, or web.")
         val detail = readJson(request("device-sessions/$sessionId"))
         val workflow = detail.path("workflow_run_id").textValue()
         requireAdapter(
@@ -129,22 +129,58 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
     }
 
     internal fun verifyCapabilities(required: Set<WorkerCapability>, optional: Set<WorkerCapability> = emptySet()) = guard {
-        if (required.isEmpty() && optional.isEmpty()) return@guard
+        val requiredCapabilities = if (attachedPlatform == "web") required + WorkerCapability.MAESTRO_WEB else required
+        if (requiredCapabilities.isEmpty() && optional.isEmpty()) return@guard
         val health = readJson(request("device-proxy/${attachedWorkflow()}/health"))
-        requireAdapter(health.isObject && health.path("status").textValue() == "ok" &&
-            health.path("workflow_run_id").textValue()?.equals(attachedWorkflow(), ignoreCase = true) == true &&
-            health.path("platform").textValue() == attachedPlatform &&
-            health.path("device_connected").isBoolean && health.path("device_connected").booleanValue(),
-            "Worker health must confirm the attached running device and platform.")
-        required.forEach { capability ->
+        if (attachedPlatform == "web") {
+            requireAdapter(health.isObject && listOf("ready", "current_fence", "first_frame_observed").all {
+                health.path(it).isBoolean && health.path(it).booleanValue()
+            }, "Worker health must confirm the ready, current-fenced web session and its first frame.")
+        } else {
+            requireAdapter(health.isObject && health.path("status").textValue() == "ok" &&
+                health.path("workflow_run_id").textValue()?.equals(attachedWorkflow(), ignoreCase = true) == true &&
+                health.path("platform").textValue() == attachedPlatform &&
+                health.path("device_connected").isBoolean && health.path("device_connected").booleanValue(),
+                "Worker health must confirm the attached running device and platform.")
+        }
+        requiredCapabilities.forEach { capability ->
             requireAdapter(health.path(capability.field).isBoolean && health.path(capability.field).booleanValue(), "The attached worker does not advertise a required command capability. No flow mutation was sent.")
         }
-        verifiedCapabilities = required + optional.filter { health.path(it.field).isBoolean && health.path(it.field).booleanValue() }
+        verifiedCapabilities = requiredCapabilities + optional.filter { health.path(it.field).isBoolean && health.path(it.field).booleanValue() }
     }
 
     fun read(action: String): ByteArray {
         requireAdapter(action in setOf("hierarchy", "screenshot"), "Unsupported proxy read.")
         return request("device-proxy/${attachedWorkflow()}/$action")
+    }
+
+    internal fun webRead(action: String, body: Map<String, Any>? = null): JsonNode = guard {
+        requireAdapter(attachedPlatform == "web" && WorkerCapability.MAESTRO_WEB in verifiedCapabilities,
+            "Required web worker capability has not been verified; no state was read.")
+        requireAdapter(when (action) {
+            "maestro_web_info", "maestro_web_hierarchy" -> body == null
+            "maestro_web_query" -> body != null
+            else -> false
+        }, "Unsupported web proxy read.")
+        val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
+        requireAdapter(result.isObject, "Revyl returned an invalid web state.")
+        result
+    }
+
+    internal fun webAct(action: String, body: Map<String, Any>) = guard {
+        requireAdapter(attachedPlatform == "web" && WorkerCapability.MAESTRO_WEB in verifiedCapabilities,
+            "Required web worker capability has not been verified; no mutation was sent.")
+        requireAdapter(action in setOf("navigate", "back", "key", "maestro_web_scroll", "maestro_web_clear_state", "drag", "longpress",
+            "maestro_web_tap", "maestro_web_input", "maestro_web_launch"), "Unsupported web proxy mutation.")
+        val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
+        val responseAction = if (action == "longpress") "long_press" else action
+        requireAdapter(result.isObject &&
+            result.path("success").isBoolean && result.path("success").booleanValue() &&
+            result.path("action").textValue() == responseAction &&
+            result.path("latency_ms").isNumber && result.path("latency_ms").doubleValue().isFinite() && result.path("latency_ms").doubleValue() >= 0 &&
+            (!result.has("error") || result.path("error").isNull) &&
+            result.path("execution_uncertain").isBoolean && !result.path("execution_uncertain").booleanValue(),
+            "Revyl did not confirm web action success. It may have executed; no adapter retry was attempted.")
     }
 
     internal fun readState(action: String): JsonNode = guard {

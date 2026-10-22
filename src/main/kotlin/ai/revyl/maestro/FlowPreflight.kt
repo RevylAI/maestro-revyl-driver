@@ -157,11 +157,20 @@ object FlowPreflight {
 
     fun validateFlow(commands: List<MaestroCommand>, platform: String, compat: Boolean = false, flow: Path? = null): ValidatedFlow {
         rejectedCommand = null
-        requireAdapter(platform in setOf("android", "ios"), "Platform must be android or ios.")
+        requireAdapter(platform in setOf("android", "ios", "web"), "Platform must be android, ios, or web.")
+        if (platform == "web") allCommands(commands).forEach { wrapper ->
+            when (wrapper.asCommand()) {
+                is TravelCommand, is SetLocationCommand, is SetOrientationCommand,
+                is SetDarkModeCommand, is ToggleDarkModeCommand, is AssertDarkModeCommand, is AssertLightModeCommand,
+                is SetAirplaneModeCommand, is ToggleAirplaneModeCommand, is StartRecordingCommand, is StopRecordingCommand, is AddMediaCommand -> unsupported()
+                else -> Unit
+            }
+        }
         val plan = ArtifactPlan(flow?.let(::workspaceRoot), compat)
         if (compat) return ValidatedFlow(mapTree(commands, 0) { compatCommand(it, platform, plan) }, plan.referenceCopies, plan.dynamicPaths)
         FlowSourceOptions.validate(commands)
         val resolvedCommands = FlowParameters.resolve(commands, platform)
+        fun selector(value: ElementSelector) = validateSelector(value, platform)
         var expandedCommands = 0
         var sourceCommands = 0
         var clipboardInitialized = false
@@ -184,19 +193,19 @@ object FlowPreflight {
                     when (command) {
                         is ApplyConfigurationCommand -> {
                             commandCount = 0
-                            validateConfig(command.config)
+                            validateConfig(command.config, platform)
                         }
                         is RunFlowCommand -> {
                             command.condition?.let { condition ->
                                 if (condition.scriptCondition != null) unsupported()
-                                requireAdapter(condition.platform?.toString()?.lowercase() in setOf(null, "android", "ios"), "Condition platform must be android or ios.")
+                                requireAdapter(condition.platform?.toString()?.lowercase() in setOf(null, "android", "ios", "web"), "Condition platform must be android, ios, or web.")
                                 requireAdapter(condition.platform != null || condition.visible != null || condition.notVisible != null, "runFlow requires a nonempty condition.")
                                 literal(condition.label)
                                 condition.visible?.let(::selector)
                                 condition.notVisible?.let(::selector)
                             }
                             literal(command.sourceDescription)
-                            command.config?.let(::validateConfig)
+                            command.config?.let { validateConfig(it, platform) }
                             val clipboardInitializedBefore = clipboardInitialized
                             val clipboardSafeBefore = clipboardSafeToPaste
                             validated = wrapper.copy(runFlowCommand = command.copy(commands = validateCommands(command.commands, depth + 1, command.sourceDescription != null)))
@@ -227,7 +236,7 @@ object FlowPreflight {
                             timeout(command.waitToSettleTimeoutMs?.toString())
                         }
                         is PressKeyCommand -> requireSupportedKey(command.code, platform)
-                        is BackPressCommand -> if (platform != "android") unsupported()
+                        is BackPressCommand -> if (platform !in setOf("android", "web")) unsupported()
                         is EraseTextCommand -> {
                             commandCount = command.charactersToErase ?: DEFAULT_ERASE_CHARACTERS
                             requireAdapter(commandCount in 1..MAX_ERASE_CHARACTERS, "Erase count must be an integer from 1 to 100; the default is 50.")
@@ -282,17 +291,17 @@ object FlowPreflight {
                         is SetDarkModeCommand -> Unit
                         is OpenLinkCommand -> requirePlainLink(command.link, command.autoVerify != false, command.browser != false)
                         is LaunchAppCommand -> {
-                            requireAdapter(command.appId.matches(appIdPattern), "Launch requires a native app ID.")
-                            command.permissions?.let { requirePermissions(it, platform) }
+                            requireAppTarget(command.appId, platform)
+                            command.permissions?.let { if (platform != "web") requirePermissions(it, platform) }
                             command.launchArguments?.let(::requireLaunchArguments)
                         }
-                        is StopAppCommand -> requireAppId(command.appId)
-                        is KillAppCommand -> requireAppId(command.appId)
-                        is ClearStateCommand -> requireAppId(command.appId)
+                        is StopAppCommand -> requireAppTarget(command.appId, platform)
+                        is KillAppCommand -> requireAppTarget(command.appId, platform)
+                        is ClearStateCommand -> requireAppTarget(command.appId, platform)
                         is ClearKeychainCommand -> Unit
                         is SetPermissionsCommand -> {
-                            requireAppId(command.appId)
-                            requirePermissions(command.permissions, platform)
+                            requireAppTarget(command.appId, platform)
+                            if (platform != "web") requirePermissions(command.permissions, platform)
                         }
                         is SetOrientationCommand -> requireAdapter(
                             runCatching { command.resolvedOrientation() }.getOrNull() in DeviceOrientation.entries,
@@ -351,7 +360,7 @@ object FlowPreflight {
         try {
             return when (command) {
                 is AssertWithAICommand, is AssertNoDefectsWithAICommand, is ExtractTextWithAICommand -> unsupported()
-                is BackPressCommand -> if (platform != "android") unsupported() else wrapper
+                is BackPressCommand -> if (platform !in setOf("android", "web")) unsupported() else wrapper
                 is SetAirplaneModeCommand, is ToggleAirplaneModeCommand -> if (platform != "android") unsupported() else wrapper
                 is PressKeyCommand -> wrapper.also { requireSupportedKey(command.code, platform) }
                 is TakeScreenshotCommand -> wrapper.copy(takeScreenshotCommand = plan.screenshot(command))
@@ -388,8 +397,9 @@ object FlowPreflight {
         }
     }
 
-    private fun validateConfig(config: MaestroConfig) {
-        requireAdapter(config.appId?.matches(appIdPattern) == true, "Use a native appId, not a URL or expression.")
+    private fun validateConfig(config: MaestroConfig, platform: String) {
+        val appId = config.appId ?: throw AdapterFailure("Flow target is required.")
+        requireAppTarget(appId, platform)
         if (config.ext.keys.any { it != "androidWebViewHierarchy" } || config.properties.isNotEmpty() || config.onFlowStart != null || config.onFlowComplete != null) unsupported()
         config.ext["androidWebViewHierarchy"]?.let { requireAdapter(it in setOf("devtools", "native"), "androidWebViewHierarchy must be devtools or native.") }
         literal(config.name)
@@ -409,6 +419,12 @@ object FlowPreflight {
     internal fun requiredCapabilities(commands: List<MaestroCommand>, platform: String): Set<WorkerCapability> = buildSet {
         allCommands(commands).forEach { wrapper ->
             val command = wrapper.asCommand()
+            if (platform == "web") {
+                val config = wrapper.applyConfigurationCommand?.config ?: wrapper.runFlowCommand?.config ?: wrapper.retryCommand?.config
+                requireAdapter(config?.ext?.get("androidWebViewHierarchy") != "devtools", "DevTools WebView hierarchy is Android-only.")
+                add(WorkerCapability.MAESTRO_WEB)
+                return@forEach
+            }
             when (command) {
                 is KillAppCommand -> if (platform == "android") add(WorkerCapability.PROCESS_DEATH_KILL)
                 is LaunchAppCommand -> if (platform == "ios" && requiresExtendedIosPermissions(command.permissions)) add(WorkerCapability.EXTENDED_IOS_PERMISSIONS)
@@ -502,13 +518,14 @@ object FlowPreflight {
         if (value?.contains("\${") == true) unsupported()
     }
 
-    private fun selector(value: ElementSelector) {
-        if (value.optional || value.css != null) unsupported()
+    private fun validateSelector(value: ElementSelector, platform: String) {
+        if (value.optional || (value.css != null && platform != "web")) unsupported()
+        literal(value.css)
         literal(value.textRegex)
         literal(value.idRegex)
         literal(value.index)
         value.index?.let { requireAdapter(it.toIntOrNull() in 0..10_000, "Selector index must be a literal non-negative integer.") }
-        listOf(value.below, value.above, value.leftOf, value.rightOf, value.containsChild, value.childOf).filterNotNull().forEach(::selector)
-        value.containsDescendants?.forEach(::selector)
+        listOf(value.below, value.above, value.leftOf, value.rightOf, value.containsChild, value.childOf).filterNotNull().forEach { validateSelector(it, platform) }
+        value.containsDescendants?.forEach { validateSelector(it, platform) }
     }
 }

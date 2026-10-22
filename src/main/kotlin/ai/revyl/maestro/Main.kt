@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.system.exitProcess
 
-private const val USAGE = "Usage: revyl-maestro [--maestro-compat [-e NAME=VALUE]...] --session UUID --platform android|ios flow.yaml\n       revyl-maestro [--maestro-compat [-e NAME=VALUE]...] --validate-only --platform android|ios flow.yaml"
+private const val USAGE = "Usage: revyl-maestro [--maestro-compat [-e NAME=VALUE]...] --session UUID --platform android|ios|web flow.yaml\n       revyl-maestro [--maestro-compat [-e NAME=VALUE]...] --validate-only --platform android|ios|web flow.yaml"
 
 private val maestroInternalEnvironment = setOf("MAESTRO_SHARD_ID", "MAESTRO_SHARD_INDEX")
 
@@ -54,7 +54,7 @@ private fun parseInvocation(args: Array<String>): Invocation {
         }
         index++
     }
-    requireAdapter(positional.size == 1 && platform in setOf("android", "ios") && (session == null) == validateOnly, USAGE)
+    requireAdapter(positional.size == 1 && platform in setOf("android", "ios", "web") && (session == null) == validateOnly, USAGE)
     requireAdapter(compat || parameters.isEmpty(), "Flow parameters from the command line require --maestro-compat.")
     if (session != null) requireAdapter(uuidPattern.matches(session), "Session must be a canonical UUID.")
     return Invocation(compat, validateOnly, session, platform!!, Path.of(positional.single()), parameters)
@@ -132,7 +132,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
                 client.set(connection)
                 connection.attach(invocation.session!!, platform)
                 connection.verifyCapabilities(requiredCapabilities, optionalCapabilities)
-                if (FlowPreflight.requiresViewerInput(commands)) connection.establishViewerInput()
+                if (platform != "web" && FlowPreflight.requiresViewerInput(commands)) connection.establishViewerInput()
                 val driver = RevylDriver(connection, platform)
                 try {
                     driver.open()
