@@ -50,8 +50,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
             requireAdapter(values[0] <= 11_520 && values[1] <= 6_480 && values[2] <= 3_840 && values[3] <= 2_160, "Web viewport exceeds the worker coordinate limits.")
             requireAdapter(values[0].toLong() * values[1] <= 16_000_000, "Web viewport exceeds the pixel limit.")
             val scaleX = values[0].toDouble() / values[2]
-            val scaleY = values[1].toDouble() / values[3]
-            requireAdapter(scaleX in 1.0..3.0 && kotlin.math.abs(scaleX - scaleY) < 0.02, "Web screenshot and selector viewport scales must agree.")
+            requireAdapter(scaleX in 1.0..3.0 && values[0].toLong() * values[3] == values[1].toLong() * values[2], "Web screenshot and selector viewport scales must agree.")
             return@guard DeviceInfo(Platform.WEB, values[0], values[1], values[2], values[3])
         }
         val png = screenshot()
@@ -106,7 +105,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
 
     override fun tap(point: Point) {
         if (platform == "web") {
-            requireAdapter(point.x in 0..1_000_000 && point.y in 0..1_000_000, "Web tap requires bounded CSS or Maestro synthetic coordinates.")
+            requireAdapter(point.x in 0..1_000_000 && point.y in 0..1_000_000, "Web tap requires bounded visual-viewport grid or Maestro synthetic coordinates.")
             client.webAct("maestro_web_tap", mapOf("x" to point.x, "y" to point.y))
             return
         }

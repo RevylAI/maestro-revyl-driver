@@ -40,8 +40,11 @@ agent policies do not automatically apply here.
   worker's supported legacy subset when the extended-permission flag is absent;
   never describe that result as confirming all extended permissions changed.
 - Web sessions require the strict `supports_maestro_web` capability before any
-  mutation. Keep proposed web routes explicitly documented as undeployed until
-  worker/backend support is verified. Use typed authenticated backend routes,
+  mutation. Distinguish source-aligned web contracts from verified cloud
+  deployment. Preserve worker-normalized visual viewport grid coordinates for
+  selectors/taps; scale only screenshot-pixel actions. Per-element unsupported
+  failures must remain terminal across retries, optional commands and hooks.
+  Use typed authenticated backend routes,
   never private CDP addresses, a locally launched browser, or visual grounding as
   a substitute for Maestro's DOM/CSS semantics. Browser closing and mobile-only
   operations must not acquire accidental session-wide effects.

@@ -1,7 +1,7 @@
 # Revyl Maestro driver
 
 Run supported Maestro flows against an **existing authorized Revyl session**.
-Android/iOS commands and the proposed gated web contract are described below.
+Android/iOS commands and the capability-gated web contract are described below.
 This runner embeds Maestro's parser and execution
 engine; it is not a plugin for stock `maestro test`. Synthetic-app flows have
 verified native assertions, taps and repeated taps, long press, focused Backspace
@@ -93,7 +93,7 @@ ancestor containing config.yaml, otherwise the flow directory); references are
 copied privately before comparison so Maestro's diff images do not modify them.
 Media paths remain literal, validated local files. Android WebView DevTools and
 process-death kill require their worker capabilities below. Web flows use the
-proposed contract below; AI commands, unsupported keys, and iOS airplane mode
+web contract below; AI commands, unsupported keys, and iOS airplane mode
 remain unsupported.
 
 ## Strict-mode supported commands
@@ -116,14 +116,15 @@ remain unsupported.
 | `hideKeyboard`, `addMedia`, appearance reads, airplane mode, recording | Deployment-gated by the feature flags below. |
 | `openLink` | Plain absolute HTTP(S) or app-scheme links, with `autoVerify: false` and `browser: false` (also the scalar form's defaults). Uses system URL routing without forcing a target app. URLs are limited to 8 KiB UTF-8; relative, control-character, embedded-credential, `file:`, `data:`, `javascript:`, and `intent:` links are rejected. |
 
-## Web platform (proposed worker contract)
+## Web platform (capability-gated worker contract)
 
 `--platform web` accepts Maestro `url:` flow headers or HTTP(S) `appId:` targets
 in both modes. It reuses the parser/Orchestra and attaches to an existing session;
 it never launches Selenium/Chrome or exposes the runtime's private CDP endpoint.
-**Current workers do not advertise the required `supports_maestro_web` flag, so
-web execution fails closed before navigation/input.** Loopback tests are contract
-coverage, not live web support. Worker/backend additions are specified in
+**All web execution requires strict readiness and `supports_maestro_web:true`
+before navigation/input.** Companion worker PR #4831 at `0be342a` derives that
+flag from current runtime probes; deployment is not verified here. Loopback tests
+are contract coverage, not live web support. The aligned contract is specified in
 [`docs/web-worker-contract.md`](docs/web-worker-contract.md).
 
 The mapping includes DOM text/ID/CSS selectors, screenshots, navigation/back,
@@ -133,8 +134,12 @@ keychain and keyboard dismissal are local no-ops like Maestro web; closing the C
 does not stop the browser/session. Mobile-only location, travel, orientation,
 appearance, airplane mode, media and recording are rejected. API-key secrecy,
 private artifacts, deadline bounds and terminal uncertain-response latching apply
-unchanged. The missing DOM/input routes must implement iframe and widget semantics
-before advertising the capability; visual grounding is not a replacement.
+unchanged. Worker-owned semantics include cross-origin/sandboxed frames, affine
+frame transforms, visual zoom, Flutter scrolling and native caret positioning.
+Hierarchy/query/tap coordinates stay in the visual-viewport-normalized grid;
+the driver scales only screenshot-pixel actions. Per-element HTTP 501
+`unsupported_web_element` failures are terminal even inside optional/retry/hooks;
+they never echo worker text. Visual grounding is not a replacement.
 
 ```bash
 build/install/revyl-maestro/bin/revyl-maestro --maestro-compat --validate-only --platform web flow.yaml
@@ -489,7 +494,7 @@ the explicit session-creation/cleanup action; building alone does not run device
 ## Remaining limits and cleanup
 
 Proxy, arbitrary browser/CDP access and AI operations remain unsupported. Web
-flows require the proposed contract above. Keyboard dismissal, media, recording, airplane mode, appearance
+flows require the capability-gated contract above. Keyboard dismissal, media, recording, airplane mode, appearance
 reads, screenshot comparison/cropping, random input, and travel are wired to the
 worker contract and are available when the attached worker advertises its strict
 capability flags. The worker's

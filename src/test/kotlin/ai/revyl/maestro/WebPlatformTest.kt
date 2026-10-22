@@ -341,6 +341,53 @@ class WebPlatformTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `zoom normalized frame selectors keep grid taps and scale only screenshot actions`(compat: Boolean) {
+        LoopbackBackend("web").use { backend ->
+            val target = node("Frame submit", "frame-submit", listOf(80, 100, 120, 140))
+            serveWeb(backend, hierarchy = { node(bounds = listOf(0, 0, 640, 360), children = listOf(target)) },
+                query = { mapOf("nodes" to listOf(target)) }, action = { request ->
+                    if (request.path.endsWith("/longpress")) reply(mapOf(
+                        "success" to true, "action" to "long_press", "error" to null,
+                        "execution_uncertain" to false, "latency_ms" to 1,
+                    )) else null
+                })
+            val previous = backend.intercept
+            backend.intercept = { request ->
+                if (request.path.endsWith("/maestro_web_info")) reply(mapOf(
+                    "width_pixels" to 1920, "height_pixels" to 1080, "width_grid" to 640, "height_grid" to 360,
+                )) else previous(request)
+            }
+            val (status, output) = run(backend, """
+                - tapOn: {css: '#frame-submit'}
+                - longPressOn: {id: frame-submit}
+                - swipe: {start: '10, 20', end: '30, 40', duration: 321}
+            """.trimIndent(), compat)
+            assertEquals(0, status, output)
+            assertEquals(expected(
+                "maestro_web_tap" to "{\"x\":100,\"y\":120}",
+                "longpress" to "{\"x\":300,\"y\":360,\"duration_ms\":3000}",
+                "drag" to "{\"start_x\":30,\"start_y\":60,\"end_x\":90,\"end_y\":120,\"duration_ms\":321}",
+            ), calls(backend).filterNot { it.first == "maestro_web_query" })
+        }
+    }
+
+    @Test fun `web viewport scale must be exactly uniform before any mutation`() {
+        LoopbackBackend("web").use { backend ->
+            serveWeb(backend)
+            val previous = backend.intercept
+            backend.intercept = { request ->
+                if (request.path.endsWith("/maestro_web_info")) reply(mapOf(
+                    "width_pixels" to 641, "height_pixels" to 360, "width_grid" to 640, "height_grid" to 360,
+                )) else previous(request)
+            }
+            val (status, output) = run(backend, "- tapOn: {point: '20, 30'}")
+            assertEquals(1, status, output)
+            assertTrue(backend.mutations.isEmpty())
+        }
+    }
+
     @Test fun `compat JavaScript produces web input through the real Orchestra engine`() {
         LoopbackBackend("web").use { backend ->
             serveWeb(backend)
@@ -355,23 +402,25 @@ class WebPlatformTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["http", "http-structured", "action", "read"])
+    @ValueSource(strings = ["http", "http-structured", "action", "read", "element-http", "element-http-structured", "element-action", "element-read"])
     fun `per element unsupported responses remain terminal across optional retry and hooks`(kind: String) {
+        val errorCode = if (kind.startsWith("element-")) "unsupported_web_element" else "not_available_on_platform"
+        val responseKind = kind.removePrefix("element-")
         LoopbackBackend("web").use { backend ->
             serveWeb(backend, action = { request ->
                 if (request.path.endsWith("/maestro_web_tap")) {
-                    if (kind.startsWith("http")) Reply(if (kind == "http") 501 else 409, json.writeValueAsBytes(mapOf("error" to "not_available_on_platform", "message" to PRIVATE_SENTINEL)))
-                    else reply(mapOf("success" to false, "action" to "maestro_web_tap", "latency_ms" to 1, "error" to "not_available_on_platform", "execution_uncertain" to false))
+                    if (responseKind.startsWith("http")) Reply(if (responseKind == "http") 501 else 409, json.writeValueAsBytes(mapOf("error" to errorCode, "message" to PRIVATE_SENTINEL)))
+                    else reply(mapOf("success" to false, "action" to "maestro_web_tap", "latency_ms" to 1, "error" to errorCode, "execution_uncertain" to false))
                 } else null
             })
-            if (kind == "read") {
+            if (responseKind == "read") {
                 val previous = backend.intercept
                 backend.intercept = { request ->
-                    if (request.path.endsWith("/maestro_web_hierarchy")) reply(mapOf("error" to mapOf("code" to "not_available_on_platform", "message" to PRIVATE_SENTINEL)))
+                    if (request.path.endsWith("/maestro_web_hierarchy")) reply(mapOf("error" to mapOf("code" to errorCode, "message" to PRIVATE_SENTINEL)))
                     else previous(request)
                 }
             }
-            val failing = if (kind == "read") "assertVisible: {text: Continue, optional: true}" else "tapOn: {point: '20, 30', optional: true}"
+            val failing = if (responseKind == "read") "assertVisible: {text: Continue, optional: true}" else "tapOn: {point: '20, 30', optional: true}"
             val (status, output) = run(backend, """
                 - retry:
                     maxRetries: 2
@@ -382,7 +431,7 @@ class WebPlatformTest {
             """.trimIndent(), compat = true, config = "url: $entryUrl\nonFlowComplete: [{pressKey: Backspace}]")
             assertEquals(1, status, output)
             assertTrue(output.contains("cannot perform this operation exactly"), output)
-            assertEquals(if (kind == "read") emptyList() else listOf("maestro_web_tap"), calls(backend).map { it.first })
+            assertEquals(if (responseKind == "read") emptyList() else listOf("maestro_web_tap"), calls(backend).map { it.first })
         }
     }
 }

@@ -32,9 +32,13 @@ internal fun unsupported(): Nothing = throw AdapterFailure("Unsupported Maestro 
 
 private fun workerUnsupported(): Nothing = throw AdapterFailure("Revyl worker cannot perform this operation exactly on the current page or element. No adapter retry was attempted.")
 
+private fun isWorkerUnsupported(error: JsonNode?): Boolean = when (error?.textValue() ?: error?.path("code")?.textValue()) {
+    "not_available_on_platform", "unsupported_web_element" -> true
+    else -> false
+}
+
 private fun requireWorkerOperationSupported(result: JsonNode) {
-    val error = result.path("error")
-    if (error.textValue() == "not_available_on_platform" || error.path("code").textValue() == "not_available_on_platform") workerUnsupported()
+    if (isWorkerUnsupported(result.path("error"))) workerUnsupported()
 }
 
 data class ConnectionSettings(val origin: String, val apiKey: String, val timeoutMs: Long) {
@@ -81,13 +85,11 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             if (!response.isSuccessful) {
                 val status = response.code
                 val errorCode = runCatching { json.readTree(response.peekBody(8_192).bytes()).path("error") }.getOrNull()
-                val operationUnsupported = errorCode?.textValue() == "not_available_on_platform" || errorCode?.path("code")?.textValue() == "not_available_on_platform"
                 response.close()
-                if (operationUnsupported) workerUnsupported()
+                if (status == 501 || isWorkerUnsupported(errorCode)) workerUnsupported()
                 throw AdapterFailure(when (status) {
                     401, 403 -> "Revyl denied access. Check the process API key and session permissions."
                     404, 410 -> "The Revyl session is unavailable or inaccessible."
-                    501 -> "Revyl worker cannot perform this operation exactly on the current page or element. No adapter retry was attempted."
                     else -> "Revyl request failed (HTTP $status); no adapter retry was attempted."
                 })
             }
