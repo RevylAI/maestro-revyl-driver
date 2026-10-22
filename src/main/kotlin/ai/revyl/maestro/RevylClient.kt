@@ -30,6 +30,17 @@ internal fun requireAdapter(condition: Boolean, message: String) {
 
 internal fun unsupported(): Nothing = throw AdapterFailure("Unsupported Maestro operation or option; no adapter retry was attempted.")
 
+private fun workerUnsupported(): Nothing = throw AdapterFailure("Revyl worker cannot perform this operation exactly on the current page or element. No adapter retry was attempted.")
+
+private fun isWorkerUnsupported(error: JsonNode?): Boolean = when (error?.textValue() ?: error?.path("code")?.textValue()) {
+    "not_available_on_platform", "unsupported_web_element" -> true
+    else -> false
+}
+
+private fun requireWorkerOperationSupported(result: JsonNode) {
+    if (isWorkerUnsupported(result.path("error"))) workerUnsupported()
+}
+
 data class ConnectionSettings(val origin: String, val apiKey: String, val timeoutMs: Long) {
     companion object {
         fun fromEnvironment(environment: Map<String, String>): ConnectionSettings {
@@ -73,7 +84,9 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             val response = chain.proceed(chain.request())
             if (!response.isSuccessful) {
                 val status = response.code
+                val errorCode = runCatching { json.readTree(response.peekBody(8_192).bytes()).path("error") }.getOrNull()
                 response.close()
+                if (status == 501 || isWorkerUnsupported(errorCode)) workerUnsupported()
                 throw AdapterFailure(when (status) {
                     401, 403 -> "Revyl denied access. Check the process API key and session permissions."
                     404, 410 -> "The Revyl session is unavailable or inaccessible."
@@ -91,7 +104,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
     fun attach(sessionId: String, platform: String) = guard {
         requireAdapter(workflowRunId == null, "The local client is already attached.")
         requireAdapter(uuidPattern.matches(sessionId), "Session must be a canonical UUID.")
-        requireAdapter(platform in setOf("android", "ios"), "Platform must be android or ios.")
+        requireAdapter(platform in setOf("android", "ios", "web"), "Platform must be android, ios, or web.")
         val detail = readJson(request("device-sessions/$sessionId"))
         val workflow = detail.path("workflow_run_id").textValue()
         requireAdapter(
@@ -128,18 +141,25 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         viewerInput!!.inputText(text, platform == "ios")
     }
 
-    internal fun verifyCapabilities(required: Set<WorkerCapability>) = guard {
-        if (required.isEmpty()) return@guard
+    internal fun verifyCapabilities(required: Set<WorkerCapability>, optional: Set<WorkerCapability> = emptySet()) = guard {
+        val requiredCapabilities = if (attachedPlatform == "web") required + WorkerCapability.MAESTRO_WEB else required
+        if (requiredCapabilities.isEmpty() && optional.isEmpty()) return@guard
         val health = readJson(request("device-proxy/${attachedWorkflow()}/health"))
-        requireAdapter(health.isObject && health.path("status").textValue() == "ok" &&
-            health.path("workflow_run_id").textValue()?.equals(attachedWorkflow(), ignoreCase = true) == true &&
-            health.path("platform").textValue() == attachedPlatform &&
-            health.path("device_connected").isBoolean && health.path("device_connected").booleanValue(),
-            "Worker health must confirm the attached running device and platform.")
-        required.forEach { capability ->
+        if (attachedPlatform == "web") {
+            requireAdapter(health.isObject && listOf("ready", "current_fence", "first_frame_observed").all {
+                health.path(it).isBoolean && health.path(it).booleanValue()
+            }, "Worker health must confirm the ready, current-fenced web session and its first frame.")
+        } else {
+            requireAdapter(health.isObject && health.path("status").textValue() == "ok" &&
+                health.path("workflow_run_id").textValue()?.equals(attachedWorkflow(), ignoreCase = true) == true &&
+                health.path("platform").textValue() == attachedPlatform &&
+                health.path("device_connected").isBoolean && health.path("device_connected").booleanValue(),
+                "Worker health must confirm the attached running device and platform.")
+        }
+        requiredCapabilities.forEach { capability ->
             requireAdapter(health.path(capability.field).isBoolean && health.path(capability.field).booleanValue(), "The attached worker does not advertise a required command capability. No flow mutation was sent.")
         }
-        verifiedCapabilities = required
+        verifiedCapabilities = requiredCapabilities + optional.filter { health.path(it.field).isBoolean && health.path(it.field).booleanValue() }
     }
 
     fun read(action: String): ByteArray {
@@ -147,13 +167,96 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         return request("device-proxy/${attachedWorkflow()}/$action")
     }
 
-    fun act(action: String, body: Map<String, Any>) = guard {
-        requireAdapter(action in setOf("tap", "launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag"), "Unsupported proxy mutation.")
+    internal fun webRead(action: String, body: Map<String, Any>? = null): JsonNode = guard {
+        requireAdapter(attachedPlatform == "web" && WorkerCapability.MAESTRO_WEB in verifiedCapabilities,
+            "Required web worker capability has not been verified; no state was read.")
+        requireAdapter(when (action) {
+            "maestro_web_info", "maestro_web_hierarchy" -> body == null
+            "maestro_web_query" -> body != null
+            else -> false
+        }, "Unsupported web proxy read.")
+        val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
+        requireWorkerOperationSupported(result)
+        requireAdapter(result.isObject, "Revyl returned an invalid web state.")
+        result
+    }
+
+    internal fun webAct(action: String, body: Map<String, Any>) = guard {
+        requireAdapter(attachedPlatform == "web" && WorkerCapability.MAESTRO_WEB in verifiedCapabilities,
+            "Required web worker capability has not been verified; no mutation was sent.")
+        requireAdapter(action in setOf("navigate", "back", "key", "maestro_web_scroll", "maestro_web_clear_state", "drag", "longpress",
+            "maestro_web_tap", "maestro_web_input", "maestro_web_launch"), "Unsupported web proxy mutation.")
+        val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
+        requireWorkerOperationSupported(result)
+        val responseAction = if (action == "longpress") "long_press" else action
+        requireAdapter(result.isObject &&
+            result.path("success").isBoolean && result.path("success").booleanValue() &&
+            result.path("action").textValue() == responseAction &&
+            result.path("latency_ms").isNumber && result.path("latency_ms").doubleValue().isFinite() && result.path("latency_ms").doubleValue() >= 0 &&
+            (!result.has("error") || result.path("error").isNull) &&
+            result.path("execution_uncertain").isBoolean && !result.path("execution_uncertain").booleanValue(),
+            "Revyl did not confirm web action success. It may have executed; no adapter retry was attempted.")
+    }
+
+    internal fun readState(action: String): JsonNode = guard {
+        val capability = when (action) {
+            "keyboard" -> WorkerCapability.KEYBOARD_CONTROL
+            "appearance" -> WorkerCapability.APPEARANCE_READ
+            "airplane_mode" -> WorkerCapability.AIRPLANE_MODE
+            "webview_hierarchy" -> WorkerCapability.WEBVIEW_HIERARCHY
+            else -> throw AdapterFailure("Unsupported proxy read.")
+        }
+        requireAdapter(capability in verifiedCapabilities, "Required worker capability has not been verified; no state was read.")
+        val result = readJson(request("device-proxy/${attachedWorkflow()}/$action"))
+        requireAdapter(result.isObject, "Revyl returned an invalid device state.")
+        result
+    }
+
+    internal fun requireCapability(capability: WorkerCapability) = guard {
+        requireAdapter(capability in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")
+    }
+
+    internal fun stopScreenRecording(recordingId: String): ByteArray = guard {
+        requireAdapter(WorkerCapability.SCREEN_RECORDING in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")
+        val (contentType, bytes) = exchange("device-proxy/${attachedWorkflow()}/stop_screen_recording", mapOf("recording_id" to recordingId), MAX_RECORDING_BYTES)
+        requireAdapter(contentType?.startsWith("video/mp4") == true && bytes.size >= 12 && String(bytes, 4, 4, Charsets.US_ASCII) == "ftyp",
+            "Revyl did not return a screen recording. It may have stopped; no adapter retry was attempted.")
+        bytes
+    }
+
+    internal fun startScreenRecording(): String = guard {
+        val recordingId = actForResult("start_screen_recording", emptyMap()).path("recording_id").textValue()
+        requireAdapter(recordingId != null && recordingId.length in 1..128 && recordingId.all { it.code in 33..126 },
+            "Revyl did not return a valid recording identifier. Recording may have started; no adapter retry was attempted.")
+        recordingId!!
+    }
+
+    fun act(action: String, body: Map<String, Any>) {
+        actForResult(action, body)
+    }
+
+    private fun actForResult(action: String, body: Map<String, Any>): JsonNode = guard {
+        requireAdapter(action in setOf("tap", "launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag",
+            "kill_app", "clear_app_state", "clear_keychain", "set_permissions", "set_orientation",
+            "hide_keyboard", "add_media", "set_airplane_mode", "start_screen_recording"), "Unsupported proxy mutation.")
         val capability = when (action) {
             "drag" -> WorkerCapability.EXPLICIT_DRAG_DURATION
+            "kill_app" -> if (body["mode"] == "process_death") WorkerCapability.PROCESS_DEATH_KILL else WorkerCapability.APP_LIFECYCLE
+            "clear_app_state", "clear_keychain", "set_permissions" -> WorkerCapability.APP_LIFECYCLE
+            "launch" -> WorkerCapability.APP_LIFECYCLE.takeIf { "arguments" in body }
+            "set_orientation" -> WorkerCapability.PRECISE_ORIENTATION
+            "hide_keyboard" -> WorkerCapability.KEYBOARD_CONTROL
+            "add_media" -> WorkerCapability.ADD_MEDIA
+            "set_airplane_mode" -> WorkerCapability.AIRPLANE_MODE
+            "start_screen_recording" -> WorkerCapability.SCREEN_RECORDING
             else -> null
         }
         requireAdapter(capability == null || capability in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")
+        if (action == "set_permissions" && attachedPlatform == "ios") {
+            val permissions = body["permissions"] as? Map<*, *> ?: throw AdapterFailure("Permissions require a map.")
+            requireAdapter(permissions.keys.none { it in extendedIosPermissions } || WorkerCapability.EXTENDED_IOS_PERMISSIONS in verifiedCapabilities,
+                "Required iOS permission capability has not been verified; no mutation was sent.")
+        }
         val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
         val responseAction = when (action) {
             "longpress" -> "long_press"
@@ -165,6 +268,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
                 (!result.has("error") || result.path("error").isNull),
             "Revyl did not confirm action success. It may have executed; no adapter retry was attempted.",
         )
+        result
     }
 
     private fun attachedWorkflow(): String = workflowRunId ?: throw AdapterFailure("No Revyl session is attached.")
@@ -174,15 +278,21 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         requireAdapter(!closed.get(), "The local Revyl client is closed.")
     }
 
+    internal fun recordFailure(failure: AdapterFailure) {
+        terminalFailure.compareAndSet(null, failure)
+    }
+
     fun <T> guard(action: () -> T): T {
         verifyHealthy()
         try { return action() } catch (failure: AdapterFailure) {
-            terminalFailure.compareAndSet(null, failure)
+            recordFailure(failure)
             throw failure
         }
     }
 
-    private fun request(path: String, body: Map<String, Any>? = null): ByteArray = guard {
+    private fun request(path: String, body: Map<String, Any>? = null): ByteArray = exchange(path, body, MAX_RESPONSE_BYTES.toLong()).second
+
+    private fun exchange(path: String, body: Map<String, Any>?, maxResponseBytes: Long): Pair<String?, ByteArray> = guard {
         requireAdapter(!closed.get() && !Thread.currentThread().isInterrupted, "The local Revyl client is closed or cancelled.")
         val remainingNanos = deadlineNanos - System.nanoTime()
         requireAdapter(remainingNanos > 0, "Flow execution timed out. An action may have executed; no adapter retry was attempted.")
@@ -197,8 +307,8 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         try {
             call.execute().use { response ->
                 val source = response.body?.source() ?: throw AdapterFailure("Revyl returned an empty response.")
-                requireAdapter(!source.request(MAX_RESPONSE_BYTES + 1L), "Revyl response exceeded the 16 MiB limit.")
-                source.readByteArray()
+                requireAdapter(!source.request(maxResponseBytes + 1L), if (maxResponseBytes == MAX_RESPONSE_BYTES.toLong()) "Revyl response exceeded the 16 MiB limit." else "Revyl response exceeded its size limit.")
+                response.header("Content-Type") to source.readByteArray()
             }
         } catch (_: IOException) {
             throw AdapterFailure("Revyl transport failed, timed out, or was cancelled. An action may have executed; no adapter retry was attempted.")

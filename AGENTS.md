@@ -6,14 +6,24 @@ agent policies do not automatically apply here.
 
 - Attach only to an existing authorized Revyl session. Closing the CLI must close
   local resources, never stop the session, app, or device.
+- `conformance/live-suite.sh` is the explicitly invoked testing exception: it may
+  create its own sessions and must stop them on completion, failure or interruption.
+  Never invoke that suite without authorization for its target environment. Keep
+  session handshakes, viewer tokens and signed app URLs out of public output.
 - Execute Maestro's published parser, models, and Orchestra runtime. Do not add a
   second YAML interpreter or claim this is a stock Maestro CLI plugin.
-- Validate the complete parsed flow before attachment. Keep the supported subset
-  explicit and reject unsupported commands, hooks, scripts, and recovery/replay
-  options. Source-option guards may reject information Maestro normalizes or
-  drops, but must not translate or execute YAML independently of Maestro.
-- Distinguish intentional bounded tap/key sequences from error recovery. Bound
-  expanded commands as well as individual counts, delays, text, and coordinates.
+- Validate the complete parsed flow before attachment. Strict mode keeps the
+  supported subset explicit and rejects optional commands, scripts, hooks, and
+  recovery/replay options. The user-approved `--maestro-compat` mode is the
+  deliberate exception: it accepts Maestro 2.10 command semantics and delegates
+  parsing, interpolation, GraalJS (including `http`), hooks, loops, retries, and
+  conditions to the pinned Orchestra runtime. Compat mode still scrubs
+  `REVYL_API_KEY` and values containing the process key from JS, keeps artifacts
+  private, gates capabilities before mutation, bounds requests and total flow time, and latches
+  uncertain proxy responses; it never adds adapter-level replay.
+- Distinguish intentional bounded tap/key sequences from error recovery. In strict
+  mode bound expanded commands, counts, delays, text, and coordinates; in compat
+  mode the overall flow deadline bounds Orchestra's loops and recovery semantics.
   An uncertain result must latch a terminal failure before any remaining action.
 - Preserve native operation semantics. Never implement text input by deliberately
   retapping, app-specific lifecycle by an untargeted operation, or a missing
@@ -25,6 +35,19 @@ agent policies do not automatically apply here.
   attached session's authenticated worker health before any flow mutation.
   Missing or malformed capabilities must fail closed. Preserve requested gesture
   duration, and validate dynamically copied text before viewer input.
+- Require the process-death, WebView, and explicit extended-iOS-permission
+  capabilities before mutation. The approved iOS `all` exception uses the
+  worker's supported legacy subset when the extended-permission flag is absent;
+  never describe that result as confirming all extended permissions changed.
+- Web sessions require the strict `supports_maestro_web` capability before any
+  mutation. Distinguish source-aligned web contracts from verified cloud
+  deployment. Preserve worker-normalized visual viewport grid coordinates for
+  selectors/taps; scale only screenshot-pixel actions. Per-element unsupported
+  failures must remain terminal across retries, optional commands and hooks.
+  Use typed authenticated backend routes,
+  never private CDP addresses, a locally launched browser, or visual grounding as
+  a substitute for Maestro's DOM/CSS semantics. Browser closing and mobile-only
+  operations must not acquire accidental session-wide effects.
 - For input, discover the attached workflow's existing viewer WebSocket only via
   the authenticated backend streaming worker-connection route. Establish it before
   any flow mutation. Never accept caller-supplied worker URLs or forward API auth
@@ -49,5 +72,9 @@ agent policies do not automatically apply here.
   before handing off changes and keep README capability claims aligned with the code.
 - Strip runtime credentials from dependency, build, and test subprocesses. Use
   only loopback fixture credentials in offline tests, including installed-CLI tests.
+- `--maestro-compat` is accepted by both run and `--validate-only`; compatibility
+  mode is opt-in and must never weaken strict-mode defaults. Compat-mode JavaScript
+  can make network requests through Maestro's `http` helper and can read flow or
+  Maestro environment values, but never the Revyl API key.
 - Remote repository creation, publication, commits, pushes, and live-device or
   cloud operations require separate explicit authorization.

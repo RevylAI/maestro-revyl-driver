@@ -27,6 +27,11 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
     private val lazyViewer = lazy { LoopbackViewer() }
     val viewer: LoopbackViewer get() = lazyViewer.value
     private var tapped = false
+    @Volatile var keyboardVisible = true
+    @Volatile var appearance = "light"
+    @Volatile var airplaneMode = false
+    var recording: ByteArray = MP4_FIXTURE
+    var webViewNodes: List<Map<String, Any>> = emptyList()
     val origin: String get() = "http://127.0.0.1:${server.address.port}"
     val environment: Map<String, String> get() = mapOf("REVYL_API_KEY" to FIXTURE_KEY, "REVYL_MAESTRO_API_URL" to origin, "REVYL_MAESTRO_FLOW_TIMEOUT_MS" to "20000")
     val mutations: List<RecordedRequest> get() = requests.filter { it.method != "GET" }
@@ -48,7 +53,23 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
                         tapped = true
                         Reply(bytes = "{\"success\":true,\"action\":\"tap\"}".toByteArray())
                     }
-                    request.method == "POST" && request.path in setOf("launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag").map { "/api/v1/execution/device-proxy/$WORKFLOW/$it" } -> {
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/keyboard" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("visible" to keyboardVisible)))
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/appearance" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("appearance" to appearance)))
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/airplane_mode" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("enabled" to airplaneMode)))
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/webview_hierarchy" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("nodes" to webViewNodes)))
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/start_screen_recording" && request.method == "POST" ->
+                        Reply(bytes = json.writeValueAsBytes(mapOf("success" to true, "action" to "start_screen_recording", "latency_ms" to 1, "error" to null, "recording_id" to "rec-1")))
+                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/stop_screen_recording" && request.method == "POST" ->
+                        Reply(bytes = recording, headers = mapOf("Content-Type" to "video/mp4"))
+                    request.method == "POST" && request.path in setOf("hide_keyboard", "add_media", "set_airplane_mode").map { "/api/v1/execution/device-proxy/$WORKFLOW/$it" } -> {
+                        val action = request.path.substringAfterLast('/')
+                        if (action == "hide_keyboard") keyboardVisible = false
+                        if (action == "set_airplane_mode") airplaneMode = json.readTree(request.body).path("enabled").booleanValue()
+                        Reply(bytes = json.writeValueAsBytes(mapOf("success" to true, "action" to action, "latency_ms" to 1, "error" to null)))
+                    }
+                    request.method == "POST" && request.path in setOf("launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag",
+                        "kill_app", "clear_app_state", "clear_keychain", "set_permissions", "set_orientation").map { "/api/v1/execution/device-proxy/$WORKFLOW/$it" } -> {
+                        if (request.path.endsWith("/set_appearance")) appearance = json.readTree(request.body).path("appearance").textValue()
                         val action = when (request.path.substringAfterLast('/')) {
                             "longpress" -> "long_press"
                             else -> request.path.substringAfterLast('/')
@@ -94,6 +115,8 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
 
     override fun close() { server.stop(0); executor.shutdownNow(); if (lazyViewer.isInitialized()) viewer.close() }
 }
+
+internal val MP4_FIXTURE: ByteArray = byteArrayOf(0, 0, 0, 24) + "ftypisom".toByteArray() + ByteArray(12) { 7 }
 
 internal fun png(width: Int, height: Int): ByteArray = ByteArrayOutputStream().use {
     ImageIO.write(BufferedImage(width, height, BufferedImage.TYPE_INT_RGB), "png", it)

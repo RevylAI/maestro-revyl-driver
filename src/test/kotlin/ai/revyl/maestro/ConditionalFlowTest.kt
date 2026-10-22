@@ -159,7 +159,7 @@ class ConditionalFlowTest {
 
     @ParameterizedTest
     @ValueSource(strings = [
-        "{true: 'true'}", "{true: '${'$'}{FLAG}'}", "{}", "null", "{platform: web}",
+        "{true: 'true'}", "{true: '${'$'}{FLAG}'}", "{}", "null", "{platform: desktop}",
         "{platform: '${'$'}{PLATFORM}'}", "{optional: true, visible: Continue}", "{visible: null}",
         "{visible: {text: Continue, optional: true}}", "{visible: Continue, unknown: true}", "{visible: {}}",
     ])

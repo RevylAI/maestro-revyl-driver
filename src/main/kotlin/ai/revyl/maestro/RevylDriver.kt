@@ -12,25 +12,47 @@ import maestro.TreeNode
 import maestro.ViewHierarchy
 import maestro.device.DeviceOrientation
 import maestro.device.Platform
+import maestro.android.chromedevtools.AndroidWebViewHierarchyClient
 import okio.Sink
 import okio.buffer
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.nio.ByteBuffer
+import java.util.Base64
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.zip.CRC32
 import javax.imageio.ImageIO
 
 class RevylDriver(private val client: RevylClient, private val platform: String) : Driver {
     private var closed = false
+    private var chromeDevToolsEnabled = false
+    private var recording: ScreenRecording? = null
+    private val recordingTimer = Executors.newSingleThreadScheduledExecutor { runnable -> Thread(runnable, "revyl-recording-deadline").apply { isDaemon = true } }
 
     override fun name(): String = "Revyl (native subset)"
     override fun open() { requireAdapter(!closed, "The local Revyl driver is closed.") }
-    override fun close() { closed = true; client.close() }
+    override fun close() {
+        try { recording?.close() } finally { closed = true; recordingTimer.shutdownNow(); client.close() }
+    }
     override fun isShutdown(): Boolean = closed
-    override fun capabilities(): List<Capability> = emptyList()
+    override fun capabilities(): List<Capability> = if (platform == "web") listOf(Capability.FAST_HIERARCHY) else emptyList()
 
     override fun deviceInfo(): DeviceInfo = client.guard {
+        if (platform == "web") {
+            val info = client.webRead("maestro_web_info")
+            val fields = listOf("width_pixels", "height_pixels", "width_grid", "height_grid").map { info.path(it) }
+            requireAdapter(info.isObject && fields.all { it.isIntegralNumber && it.canConvertToInt() && it.intValue() in 1..16_000 }, "Revyl returned invalid web viewport dimensions.")
+            val values = fields.map { it.intValue() }
+            requireAdapter(values[0] <= 11_520 && values[1] <= 6_480 && values[2] <= 3_840 && values[3] <= 2_160, "Web viewport exceeds the worker coordinate limits.")
+            requireAdapter(values[0].toLong() * values[1] <= 16_000_000, "Web viewport exceeds the pixel limit.")
+            val scaleX = values[0].toDouble() / values[2]
+            requireAdapter(scaleX in 1.0..3.0 && values[0].toLong() * values[3] == values[1].toLong() * values[2], "Web screenshot and selector viewport scales must agree.")
+            return@guard DeviceInfo(Platform.WEB, values[0], values[1], values[2], values[3])
+        }
         val png = screenshot()
         val width = ByteBuffer.wrap(png, 16, 4).int
         val height = ByteBuffer.wrap(png, 20, 4).int
@@ -45,25 +67,48 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     }
 
     override fun contentDescriptor(excludeKeyboardElements: Boolean): TreeNode = client.guard {
+        if (platform == "web") return@guard WebHierarchy.parse(client.webRead("maestro_web_hierarchy"))
         if (excludeKeyboardElements) unsupported()
-        NativeHierarchy.parse(client.read("hierarchy"), platform).root
+        val native = NativeHierarchy.parse(client.read("hierarchy"), platform).root
+        if (!chromeDevToolsEnabled || native.aggregate().none { it.attributes["class"] == "android.webkit.WebView" }) return@guard native
+        AndroidWebViewHierarchyClient.mergeHierarchies(native, parseWebViewNodes(client.readState("webview_hierarchy")))
     }
 
-    override fun launchApp(appId: String, launchArguments: Map<String, Any>) {
+    override fun launchApp(appId: String, launchArguments: Map<String, Any>) = client.guard {
+        if (platform == "web") {
+            requireAppTarget(appId, platform)
+            if (launchArguments.isEmpty()) return@guard client.webAct("navigate", mapOf("url" to appId))
+            requireLaunchArguments(launchArguments)
+            return@guard client.webAct("maestro_web_launch", mapOf("url" to appId, "arguments" to launchArguments))
+        }
         requireAdapter(appIdPattern.matches(appId), "Launch requires a native bundle or package ID.")
-        if (launchArguments.isNotEmpty()) unsupported()
-        client.act("launch", mapOf("bundle_id" to appId))
+        if (launchArguments.isEmpty()) return@guard client.act("launch", mapOf("bundle_id" to appId))
+        requireLaunchArguments(launchArguments)
+        client.act("launch", mapOf("bundle_id" to appId, "arguments" to launchArguments))
     }
 
-    override fun setPermissions(appId: String, permissions: Map<String, String>) {
-        if (permissions.isNotEmpty()) unsupported()
+    override fun setPermissions(appId: String, permissions: Map<String, String>) = client.guard {
+        if (platform == "web") return@guard
+        if (permissions.isEmpty()) return@guard
+        requireAppId(appId)
+        requirePermissions(permissions, platform)
+        client.act("set_permissions", mapOf("bundle_id" to appId, "permissions" to permissions))
     }
 
-    override fun setAndroidChromeDevToolsEnabled(enabled: Boolean) {
-        if (enabled) unsupported()
+    override fun setAndroidChromeDevToolsEnabled(enabled: Boolean) = client.guard {
+        if (enabled) {
+            requireAdapter(platform == "android", "DevTools WebView hierarchy is Android-only.")
+            client.requireCapability(WorkerCapability.WEBVIEW_HIERARCHY)
+        }
+        chromeDevToolsEnabled = enabled
     }
 
     override fun tap(point: Point) {
+        if (platform == "web") {
+            requireAdapter(point.x in 0..1_000_000 && point.y in 0..1_000_000, "Web tap requires bounded visual-viewport grid or Maestro synthetic coordinates.")
+            client.webAct("maestro_web_tap", mapOf("x" to point.x, "y" to point.y))
+            return
+        }
         val info = deviceInfo()
         requireAdapter(point.x in 0 until info.widthGrid && point.y in 0 until info.heightGrid, "Tap coordinates must be inside the native viewport.")
         client.act("tap", mapOf("x" to point.x, "y" to point.y))
@@ -120,7 +165,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     }
 
     override fun waitUntilScreenIsStatic(timeoutMs: Long): Boolean {
-        requireAdapter(timeoutMs in 1..120_000, "Screen wait must be bounded to 120000 milliseconds.")
+        requireAdapter(timeoutMs in 1..1_800_000, "Screen wait must be bounded to 1800000 milliseconds.")
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
         var previous = screenshot()
         while (System.nanoTime() < deadline) {
@@ -144,11 +189,36 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         return null
     }
 
-    override fun stopApp(appId: String): Nothing = unsupported()
-    override fun killApp(appId: String): Nothing = unsupported()
-    override fun clearAppState(appId: String): Nothing = unsupported()
-    override fun clearKeychain(): Nothing = unsupported()
+    override fun stopApp(appId: String) = client.guard {
+        if (platform == "web") return@guard
+        requireAppId(appId)
+        client.act("kill_app", mapOf("bundle_id" to appId))
+    }
+
+    override fun killApp(appId: String) = client.guard {
+        if (platform == "web") return@guard
+        requireAppId(appId)
+        if (platform == "android") client.act("kill_app", mapOf("bundle_id" to appId, "mode" to "process_death")) else stopApp(appId)
+    }
+
+    override fun clearAppState(appId: String) = client.guard {
+        if (platform == "web") {
+            requireAppTarget(appId, platform)
+            return@guard client.webAct("maestro_web_clear_state", mapOf("url" to appId))
+        }
+        requireAppId(appId)
+        client.act("clear_app_state", mapOf("bundle_id" to appId))
+    }
+
+    override fun clearKeychain() = client.guard {
+        if (platform == "ios") client.act("clear_keychain", emptyMap())
+    }
     override fun longPress(point: Point) = client.guard {
+        if (platform == "web") {
+            val info = deviceInfo()
+            requireAdapter(point.x in 0 until info.widthGrid && point.y in 0 until info.heightGrid, "Web long press must be inside the viewport.")
+            return@guard client.webAct("longpress", mapOf("x" to (point.x.toLong() * info.widthPixels / info.widthGrid).toInt(), "y" to (point.y.toLong() * info.heightPixels / info.heightGrid).toInt(), "duration_ms" to 3_000))
+        }
         val info = deviceInfo()
         requireAdapter(point.x in 0 until info.widthGrid && point.y in 0 until info.heightGrid, "Long-press coordinates must be inside the native viewport.")
         client.act("longpress", mapOf("x" to point.x, "y" to point.y, "duration_ms" to 3_000))
@@ -156,6 +226,11 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
 
     override fun pressKey(code: KeyCode) = client.guard {
         requireSupportedKey(code, platform)
+        if (platform == "web") {
+            if (code == KeyCode.BACK) return@guard backPress()
+            val key = when (code) { KeyCode.ENTER -> "Enter"; KeyCode.BACKSPACE -> "Backspace"; KeyCode.HOME -> "Home"; else -> unsupported() }
+            return@guard client.webAct("key", mapOf("key" to key))
+        }
         when (code) {
             KeyCode.ENTER, KeyCode.BACKSPACE -> client.act("key", mapOf("key" to code.name))
             KeyCode.HOME -> client.act("go_home", emptyMap())
@@ -164,14 +239,26 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         }
     }
     override fun scrollVertical() {
+        if (platform == "web") {
+            client.webAct("maestro_web_scroll", emptyMap())
+            return
+        }
         val info = deviceInfo()
         swipe(Point(info.widthGrid / 2, info.heightGrid / 2), Point(info.widthGrid / 2, info.heightGrid / 10), if (platform == "ios") 333 else 400)
     }
-    override fun isKeyboardVisible(): Nothing = unsupported()
+    override fun isKeyboardVisible(): Boolean = client.guard {
+        if (platform == "web") return@guard false
+        val visible = client.readState("keyboard").path("visible")
+        requireAdapter(visible.isBoolean, "Revyl returned an invalid keyboard state.")
+        visible.booleanValue()
+    }
     override fun swipe(start: Point, end: Point, durationMs: Long) = client.guard {
-        requireSwipeDuration(durationMs)
+        requireSwipeDuration(durationMs, platform)
         val info = deviceInfo()
         requireAdapter(start != end && listOf(start, end).all { it.x in 0 until info.widthGrid && it.y in 0 until info.heightGrid }, "Swipe endpoints must differ and lie inside the native viewport.")
+        if (platform == "web") {
+            return@guard client.webAct("drag", mapOf("start_x" to (start.x.toLong() * info.widthPixels / info.widthGrid).toInt(), "start_y" to (start.y.toLong() * info.heightPixels / info.heightGrid).toInt(), "end_x" to (end.x.toLong() * info.widthPixels / info.widthGrid).toInt(), "end_y" to (end.y.toLong() * info.heightPixels / info.heightGrid).toInt(), "duration_ms" to durationMs))
+        }
         client.act("drag", mapOf("start_x" to start.x, "start_y" to start.y, "end_x" to end.x, "end_y" to end.y, "duration_ms" to durationMs))
     }
 
@@ -197,34 +284,104 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         swipe(elementPoint, end, durationMs)
     }
     override fun backPress() = client.guard {
+        if (platform == "web") return@guard client.webAct("back", emptyMap())
         if (platform != "android") unsupported()
         client.act("back", emptyMap())
     }
     override fun inputText(text: String) = client.guard {
         requireFocusedText(text)
+        if (platform == "web") return@guard client.webAct("maestro_web_input", mapOf("text" to text))
         client.inputText(text, platform)
     }
     override fun openLink(link: String, appId: String?, autoVerify: Boolean, browser: Boolean) = client.guard {
+        if (platform == "web") {
+            requireAppTarget(link, platform)
+            return@guard client.webAct("navigate", mapOf("url" to link))
+        }
         requirePlainLink(link, autoVerify, browser)
         client.act("open_url", mapOf("url" to link))
     }
-    override fun hideKeyboard(): Nothing = unsupported()
-    override fun startScreenRecording(out: Sink): ScreenRecording = unsupported()
+    override fun hideKeyboard() = client.guard { if (platform != "web") client.act("hide_keyboard", emptyMap()) }
+
+    override fun startScreenRecording(out: Sink): ScreenRecording = client.guard {
+        val recordingId = client.startScreenRecording()
+        var timer: ScheduledFuture<*>? = null
+        val result = object : ScreenRecording {
+            private var stopped = false
+            @Synchronized override fun close() {
+                if (stopped) return
+                stopped = true
+                timer?.cancel(false)
+                client.guard {
+                    try {
+                        val video = client.stopScreenRecording(recordingId)
+                        out.buffer().use { it.write(video) }
+                    } catch (_: IOException) {
+                        throw AdapterFailure("Could not write the private recording output; no adapter retry was attempted.")
+                    }
+                }
+            }
+        }
+        recording = result
+        timer = recordingTimer.schedule({ result.close() }, 180, TimeUnit.SECONDS)
+        result
+    }
     override fun setLocation(latitude: Double, longitude: Double) = client.guard {
         requireLocation(latitude, longitude)
         client.act("set_location", mapOf("latitude" to latitude, "longitude" to longitude))
     }
-    override fun setOrientation(orientation: DeviceOrientation): Nothing = unsupported()
+    override fun setOrientation(orientation: DeviceOrientation) = client.guard {
+        val value = when (orientation) {
+            DeviceOrientation.PORTRAIT -> "portrait"
+            DeviceOrientation.LANDSCAPE_LEFT -> "landscape_left"
+            DeviceOrientation.LANDSCAPE_RIGHT -> "landscape_right"
+            DeviceOrientation.UPSIDE_DOWN -> "upside_down"
+        }
+        client.act("set_orientation", mapOf("orientation" to value))
+    }
     override fun eraseText(charactersToErase: Int) = client.guard {
         requireAdapter(charactersToErase in 1..MAX_ERASE_CHARACTERS, "Erase count must be an integer from 1 to 100.")
         repeat(charactersToErase) { pressKey(KeyCode.BACKSPACE) }
     }
     override fun setProxy(host: String, port: Int): Nothing = unsupported()
     override fun resetProxy(): Nothing = unsupported()
-    override fun addMedia(mediaFiles: List<File>): Nothing = unsupported()
-    override fun isAirplaneModeEnabled(): Boolean = unsupported()
-    override fun setAirplaneMode(enabled: Boolean): Nothing = unsupported()
-    override fun isDarkModeEnabled(): Boolean = unsupported()
+    override fun addMedia(mediaFiles: List<File>) = client.guard {
+        requireAdapter(mediaFiles.isNotEmpty(), "addMedia requires at least one file.")
+        mediaFiles.forEach(::requireMediaFile)
+        mediaFiles.forEach { file ->
+            val bytes = try { file.inputStream().use { it.readNBytes(MAX_MEDIA_FILE_BYTES.toInt() + 1) } } catch (_: IOException) {
+                throw AdapterFailure("Could not read a media file; no media request was sent for it.")
+            }
+            requireAdapter(bytes.size.toLong() in 1..MAX_MEDIA_FILE_BYTES, "Media files must be nonempty regular files of at most 25 MiB.")
+            client.act("add_media", mapOf("name" to file.name, "content_base64" to Base64.getEncoder().encodeToString(bytes)))
+        }
+    }
+
+    override fun isAirplaneModeEnabled(): Boolean = client.guard {
+        if (platform != "android") unsupported()
+        val enabled = client.readState("airplane_mode").path("enabled")
+        requireAdapter(enabled.isBoolean, "Revyl returned an invalid airplane mode state.")
+        enabled.booleanValue()
+    }
+
+    override fun setAirplaneMode(enabled: Boolean) = client.guard {
+        if (platform != "android") unsupported()
+        client.act("set_airplane_mode", mapOf("enabled" to enabled))
+    }
+
+    override fun isDarkModeEnabled(): Boolean = client.guard {
+        when (client.readState("appearance").path("appearance").textValue()) {
+            "dark" -> true
+            "light" -> false
+            else -> throw AdapterFailure("Revyl returned an invalid appearance state.")
+        }
+    }
     override fun setDarkMode(enabled: Boolean) { client.act("set_appearance", mapOf("appearance" to if (enabled) "dark" else "light")) }
-    override fun queryOnDeviceElements(query: OnDeviceElementQuery): List<TreeNode> = unsupported()
+    override fun queryOnDeviceElements(query: OnDeviceElementQuery): List<TreeNode> = client.guard {
+        if (platform != "web" || query !is OnDeviceElementQuery.Css) unsupported()
+        requireAdapter(query.css.toByteArray(Charsets.UTF_8).size in 1..8_192 && query.css.none { it.isISOControl() }, "CSS selectors must be bounded strings without control characters.")
+        val response = client.webRead("maestro_web_query", mapOf("css" to query.css))
+        requireAdapter(response.isObject && response.path("nodes").isArray, "Revyl returned invalid web selector results.")
+        WebHierarchy.parseNodes(response.path("nodes"))
+    }
 }
