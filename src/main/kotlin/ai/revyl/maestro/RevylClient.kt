@@ -30,6 +30,13 @@ internal fun requireAdapter(condition: Boolean, message: String) {
 
 internal fun unsupported(): Nothing = throw AdapterFailure("Unsupported Maestro operation or option; no adapter retry was attempted.")
 
+private fun workerUnsupported(): Nothing = throw AdapterFailure("Revyl worker cannot perform this operation exactly on the current page or element. No adapter retry was attempted.")
+
+private fun requireWorkerOperationSupported(result: JsonNode) {
+    val error = result.path("error")
+    if (error.textValue() == "not_available_on_platform" || error.path("code").textValue() == "not_available_on_platform") workerUnsupported()
+}
+
 data class ConnectionSettings(val origin: String, val apiKey: String, val timeoutMs: Long) {
     companion object {
         fun fromEnvironment(environment: Map<String, String>): ConnectionSettings {
@@ -73,10 +80,14 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             val response = chain.proceed(chain.request())
             if (!response.isSuccessful) {
                 val status = response.code
+                val errorCode = runCatching { json.readTree(response.peekBody(8_192).bytes()).path("error") }.getOrNull()
+                val operationUnsupported = errorCode?.textValue() == "not_available_on_platform" || errorCode?.path("code")?.textValue() == "not_available_on_platform"
                 response.close()
+                if (operationUnsupported) workerUnsupported()
                 throw AdapterFailure(when (status) {
                     401, 403 -> "Revyl denied access. Check the process API key and session permissions."
                     404, 410 -> "The Revyl session is unavailable or inaccessible."
+                    501 -> "Revyl worker cannot perform this operation exactly on the current page or element. No adapter retry was attempted."
                     else -> "Revyl request failed (HTTP $status); no adapter retry was attempted."
                 })
             }
@@ -163,6 +174,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             else -> false
         }, "Unsupported web proxy read.")
         val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
+        requireWorkerOperationSupported(result)
         requireAdapter(result.isObject, "Revyl returned an invalid web state.")
         result
     }
@@ -173,6 +185,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         requireAdapter(action in setOf("navigate", "back", "key", "maestro_web_scroll", "maestro_web_clear_state", "drag", "longpress",
             "maestro_web_tap", "maestro_web_input", "maestro_web_launch"), "Unsupported web proxy mutation.")
         val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
+        requireWorkerOperationSupported(result)
         val responseAction = if (action == "longpress") "long_press" else action
         requireAdapter(result.isObject &&
             result.path("success").isBoolean && result.path("success").booleanValue() &&

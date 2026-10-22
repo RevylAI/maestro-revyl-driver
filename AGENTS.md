@@ -6,6 +6,10 @@ agent policies do not automatically apply here.
 
 - Attach only to an existing authorized Revyl session. Closing the CLI must close
   local resources, never stop the session, app, or device.
+- `conformance/live-suite.sh` is the explicitly invoked testing exception: it may
+  create its own sessions and must stop them on completion, failure or interruption.
+  Never invoke that suite without authorization for its target environment. Keep
+  session handshakes, viewer tokens and signed app URLs out of public output.
 - Execute Maestro's published parser, models, and Orchestra runtime. Do not add a
   second YAML interpreter or claim this is a stock Maestro CLI plugin.
 - Validate the complete parsed flow before attachment. Strict mode keeps the

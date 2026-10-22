@@ -353,4 +353,36 @@ class WebPlatformTest {
             assertEquals(expected("maestro_web_input" to "{\"text\":\"fixture-42\"}"), calls(backend))
         }
     }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["http", "http-structured", "action", "read"])
+    fun `per element unsupported responses remain terminal across optional retry and hooks`(kind: String) {
+        LoopbackBackend("web").use { backend ->
+            serveWeb(backend, action = { request ->
+                if (request.path.endsWith("/maestro_web_tap")) {
+                    if (kind.startsWith("http")) Reply(if (kind == "http") 501 else 409, json.writeValueAsBytes(mapOf("error" to "not_available_on_platform", "message" to PRIVATE_SENTINEL)))
+                    else reply(mapOf("success" to false, "action" to "maestro_web_tap", "latency_ms" to 1, "error" to "not_available_on_platform", "execution_uncertain" to false))
+                } else null
+            })
+            if (kind == "read") {
+                val previous = backend.intercept
+                backend.intercept = { request ->
+                    if (request.path.endsWith("/maestro_web_hierarchy")) reply(mapOf("error" to mapOf("code" to "not_available_on_platform", "message" to PRIVATE_SENTINEL)))
+                    else previous(request)
+                }
+            }
+            val failing = if (kind == "read") "assertVisible: {text: Continue, optional: true}" else "tapOn: {point: '20, 30', optional: true}"
+            val (status, output) = run(backend, """
+                - retry:
+                    maxRetries: 2
+                    commands:
+                      - $failing
+                      - inputText: not-sent
+                - pressKey: Enter
+            """.trimIndent(), compat = true, config = "url: $entryUrl\nonFlowComplete: [{pressKey: Backspace}]")
+            assertEquals(1, status, output)
+            assertTrue(output.contains("cannot perform this operation exactly"), output)
+            assertEquals(if (kind == "read") emptyList() else listOf("maestro_web_tap"), calls(backend).map { it.first })
+        }
+    }
 }

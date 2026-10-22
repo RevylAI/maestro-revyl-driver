@@ -461,6 +461,31 @@ same offline check is available for any single flow:
 build/install/revyl-maestro/bin/revyl-maestro --validate-only --platform ios flow.yaml
 ```
 
+### How to run the final live test
+
+Build the runner without runtime credentials, then run the selected suite once
+you are authorized to create billable sessions in that environment:
+
+```bash
+env -u REVYL_API_KEY ./gradlew --no-daemon clean check installDist
+conformance/live-suite.sh --platform android --demo-app-url "$DEMO_APP_URL"
+conformance/live-suite.sh --platform ios --demo-app-url "$DEMO_APP_URL"
+conformance/live-suite.sh --platform web --web-app YOUR_WEB_APP_UUID --fixtures-url https://fixtures.example.org
+```
+
+Use the matching hosted demo APK or simulator `.app` ZIP from the
+[`Build Maestro demo app`](docs/demo-app-builds.md) workflow. The suite selects
+Wikipedia from Maestro's pinned manifest, runs both modes for every workspace,
+writes one private summary table, and stops its own sessions on completion,
+failure or interruption. It never prints the API key, viewer URLs or app URLs.
+The default backend is **production**; `REVYL_MAESTRO_API_URL` selects a different
+authorized backend and is also passed as the CLI's `REVYL_BACKEND_URL` for
+start/stop. A web fixture server needs a worker-reachable public HTTPS URL—local
+`e2e/serve_fixtures` alone is not enough. See
+[`docs/live-suite.md`](docs/live-suite.md) for prerequisites, artifact hosting,
+fixture exposure, timeout limits and cleanup caveats. Running each command is
+the explicit session-creation/cleanup action; building alone does not run devices.
+
 ## Remaining limits and cleanup
 
 Proxy, arbitrary browser/CDP access and AI operations remain unsupported. Web
