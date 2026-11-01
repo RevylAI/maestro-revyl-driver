@@ -257,7 +257,8 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             requireAdapter(permissions.keys.none { it in extendedIosPermissions } || WorkerCapability.EXTENDED_IOS_PERMISSIONS in verifiedCapabilities,
                 "Required iOS permission capability has not been verified; no mutation was sent.")
         }
-        val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body))
+        val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body,
+            if (action == "add_media") ADD_MEDIA_TIMEOUT_MS else settings.timeoutMs))
         val responseAction = when (action) {
             "longpress" -> "long_press"
             else -> action
@@ -290,9 +291,10 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         }
     }
 
-    private fun request(path: String, body: Map<String, Any>? = null): ByteArray = exchange(path, body, MAX_RESPONSE_BYTES.toLong()).second
+    private fun request(path: String, body: Map<String, Any>? = null, timeoutMs: Long = settings.timeoutMs): ByteArray =
+        exchange(path, body, MAX_RESPONSE_BYTES.toLong(), timeoutMs).second
 
-    private fun exchange(path: String, body: Map<String, Any>?, maxResponseBytes: Long): Pair<String?, ByteArray> = guard {
+    private fun exchange(path: String, body: Map<String, Any>?, maxResponseBytes: Long, timeoutMs: Long = settings.timeoutMs): Pair<String?, ByteArray> = guard {
         requireAdapter(!closed.get() && !Thread.currentThread().isInterrupted, "The local Revyl client is closed or cancelled.")
         val remainingNanos = deadlineNanos - System.nanoTime()
         requireAdapter(remainingNanos > 0, "Flow execution timed out. An action may have executed; no adapter retry was attempted.")
@@ -302,8 +304,12 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
             .header("X-Revyl-Agent", "Maestro")
             .header("X-Revyl-Agent-Session-Id", correlationId)
         if (body != null) builder.post(json.writeValueAsBytes(body).toRequestBody("application/json".toMediaType()))
-        val call = http.newCall(builder.build())
-        call.timeout().timeout(minOf(remainingNanos, TimeUnit.MILLISECONDS.toNanos(settings.timeoutMs)), TimeUnit.NANOSECONDS)
+        val client = if (timeoutMs == settings.timeoutMs) http else http.newBuilder()
+            .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .writeTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .build()
+        val call = client.newCall(builder.build())
+        call.timeout().timeout(minOf(remainingNanos, TimeUnit.MILLISECONDS.toNanos(timeoutMs)), TimeUnit.NANOSECONDS)
         try {
             call.execute().use { response ->
                 val source = response.body?.source() ?: throw AdapterFailure("Revyl returned an empty response.")
@@ -328,6 +334,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
 
     companion object {
         const val MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+        const val ADD_MEDIA_TIMEOUT_MS = 310_000L
 
         fun readJson(bytes: ByteArray): JsonNode = try {
             json.readTree(bytes) ?: throw AdapterFailure("Revyl returned invalid JSON.")
