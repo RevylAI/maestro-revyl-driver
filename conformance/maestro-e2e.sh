@@ -144,7 +144,7 @@ if [ "$resume" = false ]; then
 else
   [ -f "$report" ] || usage
 fi
-other_platforms="$(printf 'android\nios\nweb\n' | grep -vx "$platform" | paste -sd'|')"
+other_platforms="$(printf 'android\nios\nweb\n' | grep -vx "$platform" | paste -sd'|' -)"
 
 while IFS= read -r flow; do
   header="$(awk '/^---/{exit} {print}' "$flow")"
@@ -155,7 +155,7 @@ while IFS= read -r flow; do
   if [ "$session_budget" -ne 0 ] && awk -F'\t' -v name="$name" 'NR>1 && $1==name {found=1} END {exit !found}' "$report"; then continue; fi
   flow_out="$out/flows/${name%.yaml}"
   mkdir -p "$flow_out"
-  if preflight="$(env -u REVYL_API_KEY "$runner" "${mode[@]}" --validate-only --platform "$platform" "$flow" 2>&1)"; then
+  if preflight="$(env -u REVYL_API_KEY "$runner" ${mode[@]+"${mode[@]}"} --validate-only --platform "$platform" "$flow" 2>&1)"; then
     preflight_result="supported"
   else
     preflight_result="$(printf '%s' "$preflight" | grep -oE 'Rejected command: [A-Za-z]+Command' | sed 's/Rejected command: //' || true)"
@@ -167,7 +167,7 @@ while IFS= read -r flow; do
   if [ -n "$session" ] && [ "$preflight_result" = "supported" ]; then
     if [ "$session_budget" -ne 0 ] && [ $((SECONDS + (flow_timeout_ms + 999) / 1000 + 60)) -ge "$session_budget" ]; then exit 75; fi
     printf '%s\n' "$session" > "$flow_out/session.txt"
-    if (cd "$flow_out" && "$runner" "${mode[@]}" --session "$session" --platform "$platform" "$flow" >stdout.txt 2>stderr.txt); then live="passed"; else live="failed"; fi
+    if (cd "$flow_out" && "$runner" ${mode[@]+"${mode[@]}"} --session "$session" --platform "$platform" "$flow" >stdout.txt 2>stderr.txt); then live="passed"; else live="failed"; fi
     if { [ "$expected" = passing ] && [ "$live" = passed ]; } || { [ "$expected" = failing ] && [ "$live" = failed ]; }; then verdict="ok"; else verdict="mismatch"; fi
   fi
   printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$expected" "$preflight_result" "$live" "$verdict" >> "$report"

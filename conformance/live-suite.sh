@@ -89,7 +89,7 @@ command -v revyl >/dev/null || fail 'Install the Revyl CLI first.'
 [ -x "$root/build/install/revyl-maestro/bin/revyl-maestro" ] || fail 'Build the runner before loading credentials; see docs/live-suite.md.'
 
 private="$(mktemp -d "${TMPDIR:-/tmp}/revyl-live-suite.XXXXXXXX")"
-session='' child='' start_response="$private/start.json"
+session='' child='' start_response="$private/start.json" suite_finished=false
 parse_session() {
   python3 - "$start_response" <<'PY'
 import json
@@ -159,6 +159,7 @@ stop_session() {
 }
 cleanup() {
   local status=$?
+  if [ "$status" -eq 0 ] && [ "$suite_finished" != true ]; then status=1; fi
   trap - EXIT
   trap '' INT TERM
   if [ -n "$child" ]; then
@@ -231,7 +232,7 @@ for workspace in "${workspaces[@]}"; do
     suffix=''
     [ "$mode" = strict ] || suffix='-compat'
     report="$mode_out/$workspace-$platform$suffix.tsv"
-    resume=()
+    resume=false
     while :; do
       previous_rows=0
       [ ! -f "$report" ] || previous_rows="$(wc -l < "$report")"
@@ -242,7 +243,8 @@ for workspace in "${workspaces[@]}"; do
       session="$(parse_session 2>/dev/null)" || fail 'Session start did not return a valid session ID.'
       rm -f -- "$start_response" "$private/stderr"
       [ "$start_status" -eq 0 ] || fail 'Session start failed.'
-      harness=(bash "$root/conformance/maestro-e2e.sh" --platform "$platform" --workspace "$workspace" --session "$session" --maestro-ref "$ref" --out "$mode_out" --session-budget-seconds 2400 "${resume[@]}")
+      harness=(bash "$root/conformance/maestro-e2e.sh" --platform "$platform" --workspace "$workspace" --session "$session" --maestro-ref "$ref" --out "$mode_out" --session-budget-seconds 2400)
+      [ "$resume" = false ] || harness+=(--resume)
       [ "$mode" = strict ] || harness+=(--maestro-compat)
       [ "$workspace" != web ] || harness+=(--fixtures-url "$fixtures_url")
       harness_status=0
@@ -250,7 +252,7 @@ for workspace in "${workspaces[@]}"; do
       stop_session || fail 'Stopping the suite after a session cleanup failure.'
       if [ "$harness_status" -eq 75 ]; then
         [ -f "$report" ] && [ "$(wc -l < "$report")" -gt "$((previous_rows > 0 ? previous_rows : 1))" ] || fail 'Session budget exhausted without flow progress.'
-        resume=(--resume)
+        resume=true
         continue
       fi
       [ "$harness_status" -eq 0 ] || fail 'Conformance harness failed; stopping the suite.'
@@ -307,4 +309,5 @@ print("Live passed: %d; live failed: %d; matched-tag: %d; mismatch: %d; unsuppor
 sys.exit(1 if totals[3] else 0)
 PY
 printf 'Summary TSV: %s/summary.tsv\nSummary Markdown: %s/summary.md\n' "$out" "$out"
+suite_finished=true
 exit "$summary_status"
