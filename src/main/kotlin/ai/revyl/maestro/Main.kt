@@ -23,15 +23,16 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.system.exitProcess
 
-private const val USAGE = "Usage: revyl-maestro [--maestro-compat [-e NAME=VALUE]...] --session UUID --platform android|ios|web flow.yaml\n       revyl-maestro [--maestro-compat [-e NAME=VALUE]...] --validate-only --platform android|ios|web flow.yaml"
+private const val USAGE = "Usage: revyl-maestro [--maestro-compat [-e NAME=VALUE]...] [--failure-artifacts] --session UUID --platform android|ios|web flow.yaml\n       revyl-maestro [--maestro-compat [-e NAME=VALUE]...] --validate-only --platform android|ios|web flow.yaml"
 
 private val maestroInternalEnvironment = setOf("MAESTRO_SHARD_ID", "MAESTRO_SHARD_INDEX")
 
-private class Invocation(val compat: Boolean, val validateOnly: Boolean, val session: String?, val platform: String, val flow: Path, val parameters: Map<String, String>)
+private class Invocation(val compat: Boolean, val validateOnly: Boolean, val failureArtifacts: Boolean, val session: String?, val platform: String, val flow: Path, val parameters: Map<String, String>)
 
 private fun parseInvocation(args: Array<String>): Invocation {
     var compat = false
     var validateOnly = false
+    var failureArtifacts = false
     var session: String? = null
     var platform: String? = null
     val parameters = linkedMapOf<String, String>()
@@ -42,6 +43,7 @@ private fun parseInvocation(args: Array<String>): Invocation {
         when (val argument = args[index]) {
             "--maestro-compat" -> { requireAdapter(!compat, USAGE); compat = true }
             "--validate-only" -> { requireAdapter(!validateOnly, USAGE); validateOnly = true }
+            "--failure-artifacts" -> { requireAdapter(!failureArtifacts, USAGE); failureArtifacts = true }
             "--session" -> { requireAdapter(session == null, USAGE); session = value() }
             "--platform" -> { requireAdapter(platform == null, USAGE); platform = value() }
             "-e", "--env" -> {
@@ -54,10 +56,10 @@ private fun parseInvocation(args: Array<String>): Invocation {
         }
         index++
     }
-    requireAdapter(positional.size == 1 && platform in setOf("android", "ios", "web") && (session == null) == validateOnly, USAGE)
+    requireAdapter(positional.size == 1 && platform in setOf("android", "ios", "web") && (session == null) == validateOnly && !(validateOnly && failureArtifacts), USAGE)
     requireAdapter(compat || parameters.isEmpty(), "Flow parameters from the command line require --maestro-compat.")
     if (session != null) requireAdapter(uuidPattern.matches(session), "Session must be a canonical UUID.")
-    return Invocation(compat, validateOnly, session, platform!!, Path.of(positional.single()), parameters)
+    return Invocation(compat, validateOnly, failureArtifacts, session, platform!!, Path.of(positional.single()), parameters)
 }
 
 internal fun compatEnvironment(parameters: Map<String, String>, environment: Map<String, String>, flow: Path): Map<String, String> {
@@ -92,8 +94,13 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
     val executor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "revyl-maestro-flow").apply { isDaemon = true } }
     var scriptHttp: OkHttpClient? = null
     val scriptsClosed = AtomicBoolean(false)
+    val failedCommand = AtomicReference<FailedCommand?>()
+    val failureArtifacts = AtomicReference<Pair<Path, List<String>>?>()
+    val capturedFailure = AtomicReference<MaestroException?>()
+    var reportFailures = false
     try {
         val invocation = parseInvocation(args)
+        reportFailures = invocation.failureArtifacts
         val platform = invocation.platform
         if (invocation.validateOnly) {
             val validated = try { readFlow(invocation, environment) } catch (failure: AdapterFailure) {
@@ -139,7 +146,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
                 val driver = RevylDriver(connection, platform)
                 try {
                     driver.open()
-                    val result = runBlocking {
+                    val result = try { runBlocking {
                         withTimeout(flowTimeout) {
                             Orchestra(
                                 Maestro(driver),
@@ -147,12 +154,21 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
                                 jsEngineFactory = { if (invocation.compat) CompatJsEngine(GraalJsEngine(scriptHttp ?: OkHttpClient(), platform), settings.apiKey, validated.dynamicPaths, connection::recordFailure) else GraalJsEngine(platform = platform) },
                                 onCommandStart = { _, _ -> connection.verifyHealthy() },
                                 onCommandComplete = { _, _ -> connection.verifyHealthy() },
-                                onCommandFailed = { _, _, failure ->
+                                onCommandFailed = { _, command, failure ->
+                                    failedCommand.updateAndGet { it.withFailure(command, failure) }
                                     if (failure is AdapterFailure) connection.recordFailure(failure)
                                     throw failure
                                 },
                             ).runFlow(commands)
                         }
+                    } } catch (failure: MaestroException) {
+                        if (invocation.failureArtifacts) {
+                            val directory = newFailureArtifactDirectory()
+                            failureArtifacts.set(directory to listOf("capture did not finish before the flow deadline"))
+                            capturedFailure.set(failure)
+                            failureArtifacts.set(directory to saveFailureArtifacts(failure, driver, directory))
+                        }
+                        throw failure
                     }
                     connection.verifyHealthy()
                     result.success
@@ -162,7 +178,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
         val success = try { future.get(flowTimeout, TimeUnit.MILLISECONDS) } catch (_: TimeoutException) {
             client.get()?.close()
             future.cancel(true)
-            throw AdapterFailure("Flow execution timed out. An action may have executed; no adapter retry was attempted.")
+            throw capturedFailure.get() ?: AdapterFailure("Flow execution timed out. An action may have executed; no adapter retry was attempted.")
         } catch (failure: ExecutionException) {
             throw failure.cause ?: failure
         }
@@ -172,10 +188,18 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
     } catch (failure: Throwable) {
         val message = when (failure) {
             is AdapterFailure -> failure.message
-            is MaestroException -> "Maestro assertion or command failed. Customer details are suppressed."
+            is MaestroException -> if (reportFailures) "Maestro assertion or command failed."
+                else "Maestro assertion or command failed. Customer details are suppressed; rerun with --failure-artifacts to see the failed step."
             else -> "Maestro flow parsing or execution failed. Customer details are suppressed."
         }
         errors.println(message)
+        if (reportFailures) {
+            failedCommand.get()?.takeIf { it.failure === failure }?.let {
+                errors.println("Failed command: ${it.commandPath.joinToString(" > ")}")
+                if (failure is MaestroException) errors.println("Reason: ${failure.message}")
+            }
+            failureArtifacts.get()?.let { (directory, files) -> errors.println("Failure artifacts (private): $directory (${files.joinToString()})") }
+        }
         return 1
     } finally {
         scriptsClosed.set(true)

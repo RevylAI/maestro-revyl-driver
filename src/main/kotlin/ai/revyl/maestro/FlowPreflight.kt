@@ -488,6 +488,14 @@ object FlowPreflight {
         return repeat.repeat
     }
 
+    internal fun privateDirectory(directory: Path) {
+        val permissions = PosixFilePermissions.fromString("rwx------")
+        requireAdapter(!Files.isSymbolicLink(directory), "Private output directories must not be symlinks.")
+        if (!Files.exists(directory, NOFOLLOW_LINKS)) Files.createDirectory(directory, PosixFilePermissions.asFileAttribute(permissions))
+        requireAdapter(Files.isDirectory(directory, NOFOLLOW_LINKS), "Screenshot output must be a private directory.")
+        Files.setPosixFilePermissions(directory, permissions)
+    }
+
     fun prepareScreenshotDirectory(commands: List<MaestroCommand>) = prepareOutput(ValidatedFlow(commands, emptyMap()), compat = false)
 
     fun prepareOutput(flow: ValidatedFlow, compat: Boolean) {
@@ -496,13 +504,6 @@ object FlowPreflight {
         }.filterNot { compat && it.contains("\${") }.toList().let { if (compat) it.distinct() else it }
         if (artifacts.isEmpty() && flow.referenceCopies.isEmpty()) return
         val root = Path.of(PRIVATE_OUTPUT_DIRECTORY)
-        val directoryPermissions = PosixFilePermissions.fromString("rwx------")
-        fun privateDirectory(directory: Path) {
-            requireAdapter(!Files.isSymbolicLink(directory), "Private output directories must not be symlinks.")
-            if (!Files.exists(directory, NOFOLLOW_LINKS)) Files.createDirectory(directory, PosixFilePermissions.asFileAttribute(directoryPermissions))
-            requireAdapter(Files.isDirectory(directory, NOFOLLOW_LINKS), "Screenshot output must be a private directory.")
-            Files.setPosixFilePermissions(directory, directoryPermissions)
-        }
         fun privateFile(file: Path): Path {
             val relative = root.toAbsolutePath().relativize(file.toAbsolutePath().normalize())
             requireAdapter(!relative.startsWith(".."), "Private output must stay inside the output directory.")
