@@ -43,7 +43,8 @@ internal object FlowSourceOptions {
             requireAdapter(documents.hasNextValue(), "Flow configuration is required.")
             val config = documents.nextValue()
             requireAdapter(config.isObject, "Flow configuration is required.")
-            if (config.fieldNames().asSequence().any { it !in setOf("appId", "name", "tags", "env") }) unsupported()
+            if (config.fieldNames().asSequence().any { it !in setOf("appId", "url", "name", "tags", "env", "androidWebViewHierarchy") }) unsupported()
+            config.get("androidWebViewHierarchy")?.let { requireAdapter(it.isTextual && it.textValue() in setOf("devtools", "native"), "androidWebViewHierarchy must be devtools or native.") }
             validateTemplates(config)
             config.get("env")?.let(::validateEnv)
             requireAdapter(documents.hasNextValue(), "Flow commands are required.")
@@ -77,7 +78,7 @@ internal object FlowSourceOptions {
                             requireAdapter(condition.isObject && !condition.isEmpty, "runFlow conditions require visible, notVisible, or platform.")
                             if (condition.fieldNames().asSequence().any { it !in setOf("visible", "notVisible", "platform", "label") }) unsupported()
                             requireAdapter(listOf("visible", "notVisible", "platform").any(condition::has), "runFlow conditions require visible, notVisible, or platform.")
-                            condition.get("platform")?.let { requireAdapter(it.isTextual && it.textValue().lowercase() in setOf("android", "ios"), "Condition platform must be android or ios.") }
+                            condition.get("platform")?.let { requireAdapter(it.isTextual && it.textValue().lowercase() in setOf("android", "ios", "web"), "Condition platform must be android, ios, or web.") }
                             condition.get("label")?.let { requireAdapter(it.isTextual && !it.textValue().contains("\${"), "Condition labels must be literal text.") }
                             listOf("visible", "notVisible").forEach { name ->
                                 condition.get(name)?.let {
@@ -146,6 +147,12 @@ internal object FlowSourceOptions {
                 "eraseText" -> {
                     val count = if (options.isObject) options.get("charactersToErase") else options
                     if (count != null) requireAdapter(count.isIntegralNumber && count.canConvertToInt() && count.intValue() in 1..MAX_ERASE_CHARACTERS, "Erase count must be an integer from 1 to 100.")
+                }
+                "inputRandomText", "inputRandomNumber", "inputRandomEmail", "inputRandomPersonName", "inputRandomCityName", "inputRandomCountryName", "inputRandomColorName" -> {
+                    options.get("length")?.let { requireAdapter(it.isIntegralNumber && it.canConvertToInt() && it.intValue() in 1..MAX_RANDOM_INPUT_LENGTH, "Random input length must be an integer from 1 to 1000.") }
+                }
+                "travel" -> {
+                    options.get("speed")?.let { requireAdapter(it.isNumber, "Travel speed must be a literal number.") }
                 }
                 "setDarkMode" -> {
                     if (options.isObject) {

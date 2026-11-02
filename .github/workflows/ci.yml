@@ -20,3 +20,4 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew --no-daemon clean check installDist
       - run: build/install/revyl-maestro/bin/revyl-maestro --help
+      - run: env -u REVYL_API_KEY conformance/tests/live-suite-test.sh

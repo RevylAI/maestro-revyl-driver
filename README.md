@@ -1,7 +1,8 @@
 # Revyl Maestro driver
 
-Run supported native Maestro flows against an **existing Revyl Android or iOS
-session**. This runner embeds Maestro's parser and execution
+Run supported Maestro flows against an **existing authorized Revyl session**.
+Android/iOS commands and the capability-gated web contract are described below.
+This runner embeds Maestro's parser and execution
 engine; it is not a plugin for stock `maestro test`. Synthetic-app flows have
 verified native assertions, taps and repeated taps, long press, focused Backspace
 deletion, Enter, Home, appearance changes, and plain deep links on staging Android
@@ -9,7 +10,8 @@ emulators and iOS simulators. Android Back was also verified. Local clipboard
 commands ran in those flows; OS clipboard behavior is not provided. Location
 setting has loopback contract coverage, not app-level live GPS verification.
 Text input uses the existing authenticated viewer control channel on Android and
-iOS, with offline WebSocket/Orchestra coverage only; it has not been live-verified.
+iOS. A prod Android Wikipedia compat smoke verified random text input into search;
+iOS input still has offline WebSocket/Orchestra coverage only.
 
 ## Install
 
@@ -53,7 +55,52 @@ For text input, **close the live Revyl viewer before running the flow**, focus t
 intended field, and do not type secrets through this legacy path. See the input
 limitations below before relying on the result.
 
-## Supported commands
+## Maestro compatibility mode
+
+Strict mode remains the default. Pass `--maestro-compat` on either invocation form
+to opt into Maestro 2.10's native Orchestra execution:
+
+```bash
+build/install/revyl-maestro/bin/revyl-maestro --maestro-compat --session YOUR_RUNNING_SESSION_UUID --platform android flow.yaml
+build/install/revyl-maestro/bin/revyl-maestro --maestro-compat --validate-only --platform ios flow.yaml
+```
+
+This mode accepts optional commands/selectors, repeat times/while, retry,
+retryTapIfNoChange, waitUntilVisible, scrollUntilVisible, extendedWaitUntil,
+relative tap/swipe points, assertTrue, evalScript, runScript, full string
+expressions, when.true, hooks, random input, and travel. Scripts resolve relative
+to their flow. Maestro's own GraalJS engine provides output, maestro, faker, and
+the http helper. **JavaScript can make network requests and read flow env.**
+Only MAESTRO_* process variables are inherited, with stock filename/shard defaults;
+`-e NAME=VALUE` supplies additional explicit parameters. REVYL_API_KEY and env
+values containing the process key are scrubbed at the JS-engine boundary. Never
+put secrets in flows or text input.
+
+Compatibility mode does not add adapter retries. Maestro may repeat commands
+according to explicit retry/loop semantics, but a proxy or viewer uncertainty
+latches a terminal failure before any later mutation, including completion hooks.
+Capability gates inspect all nested branches, loops, and hooks before mutation.
+Requests remain bounded by the request timeout and total flow deadline; JS HTTP
+has the same per-request timeout but does not receive Revyl authentication.
+Expanded-command budgets do not apply to compat loops. The flow deadline bounds
+runtime instead. Validation-only parses and checks capabilities without executing
+JavaScript, so expression-derived invalid values can fail at runtime.
+
+Screenshots and recordings remain private and path-contained. Literal or resolved
+output names use simple relative segments without extensions or parent traversal.
+Screenshot references must stay inside the flow's Maestro workspace (the nearest
+ancestor containing config.yaml, otherwise the flow directory); references are
+copied privately before comparison so Maestro's diff images do not modify them.
+Literal screenshot references are checked for existence, containment and size in
+both modes before attachment; only expression-derived paths defer validation.
+Adapter failures during expression/artifact resolution also latch terminal failure
+before completion hooks can issue device actions.
+Media paths remain literal, validated local files. Android WebView DevTools and
+process-death kill require their worker capabilities below. Web flows use the
+web contract below; AI commands, unsupported keys, and iOS airplane mode
+remain unsupported.
+
+## Strict-mode supported commands
 
 | Command | Semantics and limits |
 | --- | --- |
@@ -66,8 +113,49 @@ limitations below before relying on the result.
 | `setClipboard`, `copyTextFrom` | Store text only in Maestro's local clipboard variable; these commands do not set the OS clipboard. Literal `setClipboard` text is limited to 16 KiB UTF-8. `pasteText` requires an earlier clipboard command and uses the viewer input path below. |
 | `runFlow` | File-based or inline subflows, optionally gated by native visible/notVisible/platform conditions and parameterized with scoped `env` strings. Nested commands must belong to this same supported subset; see the limits below. |
 | `setLocation` | Finite latitude in −90…90 and longitude in −180…180 degrees. Supported by the current Android emulator/iOS simulator worker paths, not physical iOS. |
-| `setDarkMode` | Explicit `enabled` or `disabled` through system appearance setting. Current worker support is emulator/simulator-only; toggles and appearance assertions are unsupported. |
+| `stopApp`, `clearState`, `clearKeychain`, `setPermissions`, `setOrientation`, full `launchApp` | Deployment-gated; see [app lifecycle](#deployment-gated-app-lifecycle). |
+| `setDarkMode` | Explicit `enabled` or `disabled` through system appearance setting. Current worker support is emulator/simulator-only. Toggles and appearance assertions additionally require `supports_appearance_read`. |
+| `inputRandom*`, `travel` | Maestro generates input or location steps locally. Strict random length is 1–1000; travel needs 2–20 points, 0.1–10000 m/s, at most 1800000 ms requested duration, and contributes 50 location steps per segment to the expanded-command budget. |
+| `assertScreenshot`, `takeScreenshot.cropOn` | Maestro compares/crops locally using the driver's screenshot. References are path-contained and copied privately; output names use simple relative segments without extensions. |
+| `hideKeyboard`, `addMedia`, appearance reads, airplane mode, recording | Deployment-gated by the feature flags below. |
 | `openLink` | Plain absolute HTTP(S) or app-scheme links, with `autoVerify: false` and `browser: false` (also the scalar form's defaults). Uses system URL routing without forcing a target app. URLs are limited to 8 KiB UTF-8; relative, control-character, embedded-credential, `file:`, `data:`, `javascript:`, and `intent:` links are rejected. |
+
+## Web platform (capability-gated worker contract)
+
+`--platform web` accepts Maestro `url:` flow headers or HTTP(S) `appId:` targets
+in both modes. It reuses the parser/Orchestra and attaches to an existing session;
+it never launches Selenium/Chrome or exposes the runtime's private CDP endpoint.
+**All web execution requires strict readiness and `supports_maestro_web:true`
+before navigation/input.** Companion worker PR #4831 at `0be342a` derives that
+flag from current runtime probes; deployment is not verified here. Loopback tests
+are contract coverage, not live web support. The aligned contract is specified in
+[`docs/web-worker-contract.md`](docs/web-worker-contract.md).
+
+The mapping includes DOM text/ID/CSS selectors, screenshots, navigation/back,
+state-preserving launch, named-origin reset, focused append/HTML date input,
+scroll/drag, keys and Maestro web synthetic/offscreen taps. Stop/kill, permissions,
+keychain and keyboard dismissal are local no-ops like Maestro web; closing the CLI
+does not stop the browser/session. Mobile-only location, travel, orientation,
+appearance, airplane mode, media and recording are rejected. API-key secrecy,
+private artifacts, deadline bounds and terminal uncertain-response latching apply
+unchanged. Worker-owned semantics include cross-origin/sandboxed frames, affine
+frame transforms, visual zoom, Flutter scrolling and native caret positioning.
+Hierarchy/query/tap coordinates stay in the visual-viewport-normalized grid;
+the driver scales only screenshot-pixel actions. Per-element HTTP 501
+`unsupported_web_element` failures are terminal even inside optional/retry/hooks;
+they never echo worker text. Visual grounding is not a replacement.
+
+```bash
+build/install/revyl-maestro/bin/revyl-maestro --maestro-compat --validate-only --platform web flow.yaml
+conformance/maestro-e2e.sh --maestro-compat --platform web --workspace web
+```
+
+The pinned Maestro workspace contains **13**, not 14, tagged web flows. Offline
+preflight accepts 13/13 in strict and compat mode; this does not prove live page
+behavior. Live fixture runs require a worker-reachable fixture base rather than
+assuming the harness machine's localhost is the browser's localhost. See
+[`docs/web-conformance.md`](docs/web-conformance.md) for Maestro's fixture server
+and the harness's `--fixtures-url` option.
 
 For example, with a text field **already focused**:
 
@@ -85,7 +173,7 @@ There may be at most 999 source commands and 1000 expanded commands across the
 whole invocation, counting each `runFlow` wrapper and each tap or Backspace in a
 sequence. Referencing a file twice counts its commands twice; configurations do
 not count as commands.
-Optional commands, scripts/arbitrary expressions, hooks, general repeat/retry blocks,
+In strict mode, optional commands, scripts/arbitrary expressions, hooks, general repeat/retry blocks,
 `retryTapIfNoChange`, and `waitUntilVisible` are rejected. Unsupported or invalid
 options are not a request to approximate the action.
 
@@ -119,7 +207,7 @@ including file references inside inline flows; absolute paths are also accepted.
 Maestro retains execution order and file-specific app IDs. Its local clipboard
 state is shared across parent, child, and sibling flows.
 
-Use exactly one nonempty literal file path or nonempty inline `commands` list;
+In strict mode, use exactly one nonempty literal file path or nonempty inline `commands` list;
 an optional `label`, `env`, and `when` are allowed. `optional` (even false), unknown
 options, scripts, hooks, and retry/repeat blocks are rejected. Nesting is limited to 16 `runFlow` levels,
 each file to 1 MiB, and aggregate YAML size across file references to 8 MiB
@@ -134,7 +222,7 @@ private `.revyl-maestro/` directory and simple-name restrictions, and names must
 be unique across the invocation and not overwrite existing artifacts. A nested
 failure is terminal: no later child or parent action and no adapter replay.
 
-`when` accepts `visible`, `notVisible`, and/or a literal `platform: android|ios`.
+In strict mode, `when` accepts `visible`, `notVisible`, and/or a literal `platform: android|ios`.
 Combined conditions use Maestro's native AND semantics and lookup waits. False
 conditions skip the subflow without failing its parent; transport failures remain
 terminal, not skips. `when.true`, JavaScript conditions, optional selectors, and
@@ -158,7 +246,7 @@ env:
       - assertVisible: ${NAME}
 ```
 
-Only `${NAME}` references and their concatenation with literal text are accepted,
+Strict mode accepts only `${NAME}` references and their concatenation with literal text,
 using explicitly declared YAML string parameters. Names must match
 `[A-Z][A-Z0-9_]{0,63}`; `JSON` is reserved. Shell variables, API credentials,
 Maestro runtime objects, copied-text expressions, Java/HTTP access, JavaScript
@@ -291,7 +379,7 @@ unchanged.
 | Command | Required health capability | Semantics and limits |
 | --- | --- | --- |
 | `swipe` | `supports_explicit_drag_duration` | One native `POST /drag`, preserving explicit endpoints and a 1–10000-ms duration; Maestro defaults to 400 ms. Supports native coordinate pairs, integer percent pairs from 0–99%, a direction, or a direction from a native element center. Endpoints must differ and fit the current native viewport. Does not use the legacy `/swipe` path or promise element dragging semantics. |
-| `scroll` | `supports_explicit_drag_duration` | One upward center-to-10%-height drag, using Maestro's native default of 400 ms on Android or 333 ms on iOS. No scroll-until-visible loop. |
+| `scroll` | `supports_explicit_drag_duration` | One upward center-to-10%-height drag, using Maestro's native default of 400 ms on Android or 333 ms on iOS. In compat mode, `scrollUntilVisible` delegates its loop and directional swipes to Maestro with this same capability gate. |
 
 Coordinates use the same native grid as taps: Android screenshot pixels and iOS
 hierarchy points, not iOS screenshot pixels. Directional swipes follow Maestro's
@@ -299,16 +387,126 @@ platform geometry; an explicit duration is forwarded unchanged, not replaced wit
 a fixed provider timing. Capability advertisement is a deployment contract, not
 evidence of actual device timing or physical-iOS compatibility.
 
+## Deployment-gated app lifecycle
+
+These commands need a worker that advertises the named boolean health capability.
+As with gestures, the runner checks the capability before the first flow mutation
+and fails the whole flow when it is missing, false, or malformed. Every operation
+is targeted at an explicit app ID; nothing acts on whichever app is in front.
+
+| Command | Required health capability | Semantics and limits |
+| --- | --- | --- |
+| `launchApp` (any form other than `stopApp: false` with `permissions: {}`) | `supports_app_lifecycle` | Follows Maestro's order: `clearKeychain`, `clearState`, `setPermissions` (default `all: allow`), then a targeted stop when `stopApp` is not false, then launch. `arguments` accepts 1–64 entries with names of 1–128 `[A-Za-z0-9_.-]` characters and string (≤4 KiB, no control characters), integer, finite number, or boolean values. |
+| `stopApp` | `supports_app_lifecycle` | Targeted terminate of the flow's or the named app. |
+| `killApp` | `supports_app_lifecycle` on iOS; `supports_process_death_kill` on Android | iOS targeted terminate. Android uses `kill_app` with `mode: process_death` to simulate system process death rather than force-stop. |
+| `clearState` | `supports_app_lifecycle` | Resets the app's data, then resets all its permissions to `unset` like Maestro. Not available on physical iOS. |
+| `clearKeychain` | `supports_app_lifecycle` on iOS | Resets the simulator keychain. A local no-op on Android, matching Maestro's Android driver. |
+| `setPermissions` | `supports_app_lifecycle` | Maestro permission names with `allow`, `deny`, or `unset`. Android also accepts fully qualified `*.permission.*` names. Names that do not exist on the platform fail preflight. |
+| `setOrientation` | `supports_precise_orientation` | `PORTRAIT`, `LANDSCAPE_LEFT`, `LANDSCAPE_RIGHT`, or `UPSIDE_DOWN`, applied exactly or not at all. |
+
+Explicit iOS `camera`, `notifications`, `health`, `homekit`, `speech`, and
+`userTracking` names additionally require `supports_extended_ios_permissions`.
+For iOS `all` (including Maestro's default launch permissions), that flag is
+optional: missing, false, or malformed means the worker's supported legacy subset,
+not a claim that every extended permission changed. A strict true flag enables
+the worker's extended set. The driver still forwards `{all: allow|deny|unset}`;
+the worker owns platform expansion. Explicit named requests never silently degrade.
+
+`androidWebViewHierarchy: devtools` is supported in both modes and requires
+`supports_webview_hierarchy` before any mutation. This is the only related flow
+configuration key used by the pinned Maestro 2.10 Orchestra. When the native tree
+contains `android.webkit.WebView`, the driver reads `webview_hierarchy` as
+`{nodes: [...]}`, each node `{text, id, bounds: {x, y, width, height}, children}` in screen pixels,
+converts bounds to Maestro rectangles, and delegates merging to Maestro's own
+Android WebView merge helper. Native text and IDs are preserved; additional DOM
+text/IDs become normal selectors. Empty valid lists keep the native tree; malformed
+or uncertain reads are terminal rather than silently returning native-only results.
+Strict mode still rejects `scrollUntilVisible` and scripts independently of this
+configuration; use compat mode for upstream flows that require those semantics.
+
+## Deployment-gated device features
+
+These flags are checked as strict boolean true values on the authenticated worker
+health response before any flow mutation, in both modes. Missing or malformed
+flags fail closed, including in skipped branches, retries, loops, and hooks.
+
+| Commands | Required health capability | Proxy contract |
+| --- | --- | --- |
+| hideKeyboard | supports_keyboard_control | POST hide_keyboard {} then GET keyboard -> {visible: bool}. |
+| addMedia | supports_add_media | One POST add_media {name, content_base64} per file. Simple basename of at most 128 ASCII letters/digits/dots/dashes/underscores; png, jpg, jpeg, gif, heic, mp4, mov only. Every file is checked before attachment; decoded size is 1 byte–25 MiB. |
+| toggleDarkMode, assertDarkMode, assertLightMode | supports_appearance_read | GET appearance -> {appearance: dark\|light}; toggles use the existing set_appearance mutation. |
+| setAirplaneMode, toggleAirplaneMode | supports_airplane_mode | Android only. POST set_airplane_mode {enabled: bool}; toggle reads GET airplane_mode -> {enabled: bool}. |
+| startRecording, stopRecording | supports_screen_recording | POST start_screen_recording {} returns ActionResponse plus recording_id; POST stop_screen_recording {recording_id} returns raw video/mp4, or JSON ActionResponse on error. At most 180 seconds and 100 MiB; MP4 output is private. |
+
+Proxy routes use /api/v1/execution/device-proxy/{workflow_run_id}/{action}.
+Mutations require strict success: true, the exact route name as action, and no
+error; state reads require their typed fields. stop_screen_recording requires
+video/mp4 bytes rather than a successful JSON response. The worker must enforce
+the recording time and size limits too. These new contracts have loopback coverage;
+they are not live-verified until the worker/backend deployment advertises them.
+
+## Conformance against Maestro's public e2e flows
+
+`conformance/maestro-e2e.sh` measures the runner against the flows Maestro uses to
+test itself (`e2e/demo_app` and `e2e/workspaces/wikipedia` at the pinned Maestro
+release). Each flow carries a `passing` or `failing` tag, so a run checks both
+directions. Without `--session` it only classifies every flow offline as supported
+or by its first rejected command; with `--session` it also runs each supported
+flow against that existing session, which must already have the workspace's app
+installed (the Wikipedia APK and app are listed in Maestro's `e2e/manifest.txt`;
+the demo app is built from `e2e/demo_app`).
+
+```bash
+./gradlew --no-daemon installDist
+conformance/maestro-e2e.sh --platform android --workspace demo_app
+conformance/maestro-e2e.sh --maestro-compat --platform android --workspace demo_app
+conformance/maestro-e2e.sh --maestro-compat --platform android --workspace wikipedia --session YOUR_RUNNING_SESSION_UUID
+```
+
+The per-flow report is written privately under `.revyl-maestro/conformance/`. The
+same offline check is available for any single flow:
+
+```bash
+build/install/revyl-maestro/bin/revyl-maestro --validate-only --platform ios flow.yaml
+```
+
+### How to run the final live test
+
+Build the runner without runtime credentials, then run the selected suite once
+you are authorized to create billable sessions in that environment:
+
+```bash
+env -u REVYL_API_KEY ./gradlew --no-daemon clean check installDist
+conformance/live-suite.sh --platform android --demo-app-url "$DEMO_APP_URL"
+conformance/live-suite.sh --platform ios --demo-app-url "$DEMO_APP_URL"
+conformance/live-suite.sh --platform web --web-app YOUR_WEB_APP_UUID --fixtures-url https://fixtures.example.org
+```
+
+Use the matching hosted demo APK or simulator `.app` ZIP from the
+[`Build Maestro demo app`](docs/demo-app-builds.md) workflow. The suite selects
+Wikipedia from Maestro's pinned manifest, runs both modes for every workspace,
+writes one private summary table, and stops its own sessions on completion,
+failure or interruption. It never prints the API key, viewer URLs or app URLs.
+The default backend is **production**; `REVYL_MAESTRO_API_URL` selects a different
+authorized backend and is also passed as the CLI's `REVYL_BACKEND_URL` for
+start/stop. A web fixture server needs a worker-reachable public HTTPS URL—local
+`e2e/serve_fixtures` alone is not enough. See
+[`docs/live-suite.md`](docs/live-suite.md) for prerequisites, artifact hosting,
+fixture exposure, timeout limits and cleanup caveats. Running each command is
+the explicit session-creation/cleanup action; building alone does not run devices.
+
 ## Remaining limits and cleanup
 
-App stop/kill/reset, keychain, permissions,
-`scrollUntilVisible`, element dragging, orientation, keyboard dismissal, media,
-recording, proxy, airplane mode, AI and web operations remain unsupported. The
-worker's coordinate-based input is not equivalent to typing into current focus;
-the accepted runtime input-fallback limitation is described above.
-The app must already be running; optional
-[non-resetting launch](examples/non-resetting-launch.yaml) still requires
-`stopApp: false` and `permissions: {}`.
+Proxy, arbitrary browser/CDP access and AI operations remain unsupported. Web
+flows require the capability-gated contract above. Keyboard dismissal, media, recording, airplane mode, appearance
+reads, screenshot comparison/cropping, random input, and travel are wired to the
+worker contract and are available when the attached worker advertises its strict
+capability flags. The worker's
+coordinate-based input is not equivalent to typing into current focus; the
+accepted runtime input-fallback limitation is described above. Without the
+app-lifecycle capability, the app must already be running and only the
+[non-resetting launch](examples/non-resetting-launch.yaml) form (`stopApp: false`,
+`permissions: {}`) runs.
 
 The adapter does not replay a failed or uncertain request, and stops all remaining
 actions when an acknowledgment fails. **This is not an end-to-end at-most-once

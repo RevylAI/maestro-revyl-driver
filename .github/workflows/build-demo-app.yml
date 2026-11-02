@@ -1,0 +1,139 @@
+name: Build Maestro demo app
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/build-demo-app.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }} demo app
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: android
+            runner: ubuntu-24.04
+          - platform: ios
+            runner: macos-15
+    defaults:
+      run:
+        shell: bash
+        working-directory: maestro-upstream/e2e/demo_app
+    steps:
+      - name: Check out pinned Maestro source
+        uses: actions/checkout@v4
+        with:
+          repository: mobile-dev-inc/maestro
+          ref: 14a408335e17a090df1e26bdbeaf80d8122a8fd8
+          path: maestro-upstream
+          persist-credentials: false
+
+      - name: Verify source commit
+        working-directory: maestro-upstream
+        run: test "$(git rev-parse HEAD)" = 14a408335e17a090df1e26bdbeaf80d8122a8fd8
+
+      - name: Set up Java for Android
+        if: matrix.platform == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter from upstream pubspec
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: maestro-upstream/e2e/demo_app/pubspec.yaml
+
+      - name: Select Xcode SDK for pinned connectivity plugin
+        if: matrix.platform == 'ios'
+        run: |
+          developer_dir="$(python3 - <<'PY'
+          import plistlib
+          import re
+          import sys
+          from pathlib import Path
+          candidates = []
+          for app in Path('/Applications').glob('Xcode*.app'):
+              if 'beta' in app.name.lower():
+                  continue
+              metadata = app / 'Contents/version.plist'
+              if not metadata.is_file():
+                  continue
+              with metadata.open('rb') as source:
+                  version = plistlib.load(source).get('CFBundleShortVersionString', '')
+              if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version):
+                  continue
+              parts = tuple(map(int, version.split('.')))
+              parts += (0,) * (3 - len(parts))
+              if (26, 1, 1) <= parts < (27, 0, 0):
+                  candidates.append((parts, str(app.resolve() / 'Contents/Developer')))
+          if not candidates:
+              sys.exit('No installed stable Xcode >=26.1.1 and <27; required by the pinned Flutter/plugin build.')
+          print(max(candidates)[1])
+          PY
+          )"
+          sudo xcode-select --switch "$developer_dir"
+          xcodebuild -version
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Build Android release APK
+        if: matrix.platform == 'android'
+        run: |
+          flutter build apk --release
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/dist/demo_app.apk"
+          printf 'Build mode: release (upstream debug signing key)\n' > "$GITHUB_WORKSPACE/dist/BUILD-INFO.txt"
+
+      - name: Build and package iOS simulator app
+        if: matrix.platform == 'ios'
+        run: |
+          flutter build ios --simulator --debug --no-codesign
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          ditto -c -k --sequesterRsrc --keepParent build/ios/iphonesimulator/Runner.app "$GITHUB_WORKSPACE/dist/demo_app.app.zip"
+          {
+            printf 'Build mode: debug, iOS simulator only, no code signing\n'
+            printf 'Runner executable architectures: '
+            lipo -archs build/ios/iphonesimulator/Runner.app/Runner
+            xcodebuild -version
+          } > "$GITHUB_WORKSPACE/dist/BUILD-INFO.txt"
+
+      - name: Record source, build information, and checksums
+        run: |
+          git rev-parse HEAD > "$GITHUB_WORKSPACE/dist/SOURCE_COMMIT.txt"
+          {
+            printf 'Source: mobile-dev-inc/maestro, cli-2.10.0\n'
+            printf 'Source directory: e2e/demo_app\n'
+            printf 'Runner host: '
+            uname -sm
+            flutter --version
+          } >> "$GITHUB_WORKSPACE/dist/BUILD-INFO.txt"
+          cd "$GITHUB_WORKSPACE/dist"
+          shasum -a 256 demo_app.* SOURCE_COMMIT.txt BUILD-INFO.txt > SHA256SUMS
+          {
+            printf '## Maestro demo app: %s\n\n' '${{ matrix.platform }}'
+            printf 'Source commit: `%s`\n\n' "$(cat SOURCE_COMMIT.txt)"
+            printf '```text\n'
+            cat BUILD-INFO.txt
+            printf '\nSHA-256 checksums:\n'
+            cat SHA256SUMS
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload demo app and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-demo-app-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
