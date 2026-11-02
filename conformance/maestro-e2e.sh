@@ -76,7 +76,7 @@ else:
     text = path.read_text()
     for match in re.finditer(r'text: "(Latitude|Longitude): (-?\d+\.\d{6})"', text):
         coordinate = Decimal(match[2])
-        values = [re.escape(f"{coordinate + Decimal(delta) / 1000000:.6f}") for delta in (-1, 0, 1)]
+        values = [re.escape(f"{coordinate + Decimal(delta) / 1000000:.6f}") for delta in range(-5, 6)]
         text = text.replace(match[0], f"text: '{match[1]}: ({'|'.join(values)})'")
 path.write_text(text)
 PY

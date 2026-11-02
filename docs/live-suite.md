@@ -81,11 +81,17 @@ The harness supplies upstream's `MAESTRO_EXAMPLE=test-value` environment and
 recognizes platform tags with inline comments. It copies Android Wikipedia
 fixtures privately to select the installed APK's visible `Forward` control,
 whose old resource ID is absent. Both native setLocation copies retain all four
-coordinate assertions and unchanged requests, allowing only the requested
-six-decimal value or its immediate neighbor (±0.000001°, at most 0.12 m per
-axis). This covers the observed last-digit quantization without accepting
-arbitrary suffixes or dropping latitude/longitude checks. The pinned checkout
-is never modified.
+coordinate assertions and unchanged requests, comparing at five-decimal
+resolution: ±0.000005° around each requested coordinate (less than 0.6 m per
+axis). Each regex enumerates only the eleven six-decimal display values in
+that interval; it accepts neither arbitrary suffixes nor a different location.
+The adapter forwards doubles without rounding, while the pinned demo reads
+Geolocator positions and formats them with `toStringAsFixed(6)`. Six displayed
+decimals are not a sensor-accuracy guarantee: Android reported 4.1–5.9 m
+accuracy and varying final decimal digits. This sub-meter comparison remains
+tighter than that reported accuracy without assuming one emulator's last-digit
+offset. Both axes and both locations remain required, including in strict mode
+without JavaScript. The pinned checkout is never modified.
 
 For an already authorized session, `maestro-e2e.sh` remains attach-only. Its
 `--session-budget-seconds 2400` option enables the same bounded continuation:
