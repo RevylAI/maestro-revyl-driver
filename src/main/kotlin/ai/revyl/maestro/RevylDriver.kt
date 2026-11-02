@@ -13,6 +13,9 @@ import maestro.ViewHierarchy
 import maestro.device.DeviceOrientation
 import maestro.device.Platform
 import maestro.android.chromedevtools.AndroidWebViewHierarchyClient
+import maestro.orchestra.MaestroCommand
+import maestro.orchestra.TapOnElementCommand
+import maestro.orchestra.TapOnPointV2Command
 import okio.Sink
 import okio.buffer
 import java.io.ByteArrayInputStream
@@ -31,12 +34,14 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     private var closed = false
     private var chromeDevToolsEnabled = false
     private var recording: ScreenRecording? = null
+    private var compoundDoubleTap = false
+    private var pendingDoubleTapPoint: Point? = null
     private val recordingTimer = Executors.newSingleThreadScheduledExecutor { runnable -> Thread(runnable, "revyl-recording-deadline").apply { isDaemon = true } }
 
     override fun name(): String = "Revyl (native subset)"
     override fun open() { requireAdapter(!closed, "The local Revyl driver is closed.") }
     override fun close() {
-        try { recording?.close() } finally { closed = true; recordingTimer.shutdownNow(); client.close() }
+        try { recording?.close() } finally { finishCommand(); closed = true; recordingTimer.shutdownNow(); client.close() }
     }
     override fun isShutdown(): Boolean = closed
     override fun capabilities(): List<Capability> = if (platform == "web") listOf(Capability.FAST_HIERARCHY) else emptyList()
@@ -103,15 +108,36 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         chromeDevToolsEnabled = enabled
     }
 
+    internal fun startCommand(command: MaestroCommand) {
+        finishCommand()
+        val repeat = when (val tap = command.asCommand()) {
+            is TapOnElementCommand -> tap.repeat.takeUnless { tap.longPress == true }
+            is TapOnPointV2Command -> tap.repeat.takeUnless { tap.longPress == true }
+            else -> null
+        }
+        compoundDoubleTap = platform != "web" && repeat?.repeat == 2 && repeat.delay == TapOnElementCommand.DEFAULT_REPEAT_DELAY
+    }
+
+    internal fun finishCommand() {
+        compoundDoubleTap = false
+        pendingDoubleTapPoint = null
+    }
+
     override fun tap(point: Point) {
         if (platform == "web") {
             requireAdapter(point.x in 0..1_000_000 && point.y in 0..1_000_000, "Web tap requires bounded visual-viewport grid or Maestro synthetic coordinates.")
             client.webAct("maestro_web_tap", mapOf("x" to point.x, "y" to point.y))
             return
         }
+        pendingDoubleTapPoint?.let { expected ->
+            requireAdapter(compoundDoubleTap && point == expected, "Maestro changed coordinates within a compound double tap.")
+            pendingDoubleTapPoint = null
+            return
+        }
         val info = deviceInfo()
         requireAdapter(point.x in 0 until info.widthGrid && point.y in 0 until info.heightGrid, "Tap coordinates must be inside the native viewport.")
-        client.act("tap", mapOf("x" to point.x, "y" to point.y))
+        client.act(if (compoundDoubleTap) "double_tap" else "tap", mapOf("x" to point.x, "y" to point.y))
+        if (compoundDoubleTap) pendingDoubleTapPoint = point
     }
 
     override fun takeScreenshot(out: Sink, compressed: Boolean) {

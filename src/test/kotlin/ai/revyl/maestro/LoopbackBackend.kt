@@ -49,9 +49,9 @@ internal class LoopbackBackend(val platform: String = "android") : Closeable {
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/hierarchy" && request.method == "GET" -> Reply(bytes = hierarchy())
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/health" && request.method == "GET" -> Reply(bytes = health())
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/screenshot" && request.method == "GET" -> Reply(bytes = png(if (platform == "ios") 300 else 100, if (platform == "ios") 600 else 200))
-                    request.path == "/api/v1/execution/device-proxy/$WORKFLOW/tap" && request.method == "POST" -> {
+                    request.path in setOf("tap", "double_tap").map { "/api/v1/execution/device-proxy/$WORKFLOW/$it" } && request.method == "POST" -> {
                         tapped = true
-                        Reply(bytes = "{\"success\":true,\"action\":\"tap\"}".toByteArray())
+                        Reply(bytes = json.writeValueAsBytes(mapOf("success" to true, "action" to request.path.substringAfterLast('/'))))
                     }
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/keyboard" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("visible" to keyboardVisible)))
                     request.path == "/api/v1/execution/device-proxy/$WORKFLOW/appearance" && request.method == "GET" -> Reply(bytes = json.writeValueAsBytes(mapOf("appearance" to appearance)))
