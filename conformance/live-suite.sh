@@ -225,23 +225,38 @@ for workspace in "${workspaces[@]}"; do
   else
     start+=(--app-url "$demo_url")
   fi
-  start_status=0
-  capture="$start_response"
-  run_private 2100 bash -c 'cd "$1"; shift; exec "$@"' _ "$private" env HOME="$private/home" revyl "${start[@]}" || start_status=$?
-  unset capture
-  session="$(parse_session 2>/dev/null)" || fail 'Session start did not return a valid session ID.'
-  rm -f -- "$start_response" "$private/stderr"
-  [ "$start_status" -eq 0 ] || fail 'Session start failed.'
   for mode in strict compat; do
     mode_out="$out/$workspace/$mode"
     mkdir -p "$mode_out"
-    harness=(bash "$root/conformance/maestro-e2e.sh" --platform "$platform" --workspace "$workspace" --session "$session" --maestro-ref "$ref" --out "$mode_out")
-    [ "$mode" = strict ] || harness+=(--maestro-compat)
-    [ "$workspace" != web ] || harness+=(--fixtures-url "$fixtures_url")
-    run_private 7200 "${harness[@]}" || fail 'Conformance harness failed; stopping the suite.'
     suffix=''
     [ "$mode" = strict ] || suffix='-compat'
-    env -u REVYL_API_KEY python3 - "$mode_out/$workspace-$platform$suffix.tsv" "$out/summary.tsv" "$workspace" "$mode" <<'PY' || fail 'Invalid conformance report.'
+    report="$mode_out/$workspace-$platform$suffix.tsv"
+    resume=()
+    while :; do
+      previous_rows=0
+      [ ! -f "$report" ] || previous_rows="$(wc -l < "$report")"
+      start_status=0
+      capture="$start_response"
+      run_private 600 bash -c 'cd "$1"; shift; exec "$@"' _ "$private" env HOME="$private/home" revyl "${start[@]}" || start_status=$?
+      unset capture
+      session="$(parse_session 2>/dev/null)" || fail 'Session start did not return a valid session ID.'
+      rm -f -- "$start_response" "$private/stderr"
+      [ "$start_status" -eq 0 ] || fail 'Session start failed.'
+      harness=(bash "$root/conformance/maestro-e2e.sh" --platform "$platform" --workspace "$workspace" --session "$session" --maestro-ref "$ref" --out "$mode_out" --session-budget-seconds 2400 "${resume[@]}")
+      [ "$mode" = strict ] || harness+=(--maestro-compat)
+      [ "$workspace" != web ] || harness+=(--fixtures-url "$fixtures_url")
+      harness_status=0
+      run_private 2400 "${harness[@]}" || harness_status=$?
+      stop_session || fail 'Stopping the suite after a session cleanup failure.'
+      if [ "$harness_status" -eq 75 ]; then
+        [ -f "$report" ] && [ "$(wc -l < "$report")" -gt "$((previous_rows > 0 ? previous_rows : 1))" ] || fail 'Session budget exhausted without flow progress.'
+        resume=(--resume)
+        continue
+      fi
+      [ "$harness_status" -eq 0 ] || fail 'Conformance harness failed; stopping the suite.'
+      break
+    done
+    env -u REVYL_API_KEY python3 - "$report" "$out/summary.tsv" "$workspace" "$mode" <<'PY' || fail 'Invalid conformance report.'
 import csv
 import sys
 try:
@@ -271,7 +286,6 @@ except (OSError, ValueError, TypeError, KeyError):
     sys.exit(1)
 PY
   done
-  stop_session || fail 'Stopping the suite after a session cleanup failure.'
 done
 summary_status=0
 env -u REVYL_API_KEY python3 - "$out" <<'PY' || summary_status=$?

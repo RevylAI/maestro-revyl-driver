@@ -169,8 +169,8 @@ def run_case(name, platform="android", scenario="ok", extra=(), api=None, expect
     if scenario == "ok" or scenario == "mismatch":
         workspaces = ["web"] if platform == "web" else ["wikipedia", "demo_app"]
         origin = api if api is not None else "https://backend.revyl.ai"
-        assert events == [event for w in workspaces for event in
-                          [f"start {w} {origin}", f"harness {w} strict", f"harness {w} compat", "stop"]], (name, events)
+        assert events == [event for w in workspaces for mode in ("strict", "compat") for event in
+                          [f"start {w} {origin}", f"harness {w} {mode}", "stop"]], (name, events)
         with (case / "out/summary.tsv").open() as f: rows = list(csv.reader(f, delimiter="\t"))
         n = len(workspaces) * 2
         assert rows[-1] == ["TOTAL", "all", str(n * (2 if scenario == "mismatch" else 1)), str(n), str(2*n), str(n if scenario == "mismatch" else 0), str(n)]

@@ -8,11 +8,11 @@ set -euo pipefail
 umask 077
 
 usage() {
-  echo "Usage: conformance/maestro-e2e.sh --platform android|ios|web --workspace demo_app|wikipedia|web [--session UUID] [--fixtures-url HTTP(S)_BASE] [--maestro-compat] [--maestro-ref REF] [--out DIR]" >&2
+  echo "Usage: conformance/maestro-e2e.sh --platform android|ios|web --workspace demo_app|wikipedia|web [--session UUID] [--fixtures-url HTTP(S)_BASE] [--maestro-compat] [--maestro-ref REF] [--out DIR] [--session-budget-seconds SECONDS] [--resume]" >&2
   exit 2
 }
 
-platform="" workspace="" session="" fixtures_url="" ref="cli-2.10.0" out=".revyl-maestro/conformance" mode=()
+platform="" workspace="" session="" fixtures_url="" ref="cli-2.10.0" out=".revyl-maestro/conformance" mode=() session_budget=0 resume=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --platform) [ $# -ge 2 ] || usage; platform="$2"; shift 2 ;;
@@ -22,6 +22,8 @@ while [ $# -gt 0 ]; do
     --maestro-compat) mode=(--maestro-compat); shift ;;
     --maestro-ref) [ $# -ge 2 ] || usage; ref="$2"; shift 2 ;;
     --out) [ $# -ge 2 ] || usage; out="$2"; shift 2 ;;
+    --session-budget-seconds) [ $# -ge 2 ] || usage; session_budget="$2"; shift 2 ;;
+    --resume) resume=true; shift ;;
     *) usage ;;
   esac
 done
@@ -32,6 +34,17 @@ case "$workspace" in
   web) flows_path="e2e/workspaces/web" ;;
   *) usage ;;
 esac
+case "$session_budget" in ''|*[!0-9]*) usage ;; esac
+flow_timeout_ms="${REVYL_MAESTRO_FLOW_TIMEOUT_MS:-300000}"
+case "$flow_timeout_ms" in ''|*[!0-9]*) usage ;; esac
+if [ "$session_budget" -ne 0 ]; then
+  [ -n "$session" ] && [ "$session_budget" -le 2400 ] &&
+    [ "$flow_timeout_ms" -ge 1 ] && [ "$flow_timeout_ms" -le 1800000 ] &&
+    [ "$session_budget" -gt $(((flow_timeout_ms + 999) / 1000 + 60)) ] || usage
+fi
+[ "$resume" = false ] || [ "$session_budget" -ne 0 ] || usage
+SECONDS=0
+export MAESTRO_EXAMPLE=test-value
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 runner="$root/build/install/revyl-maestro/bin/revyl-maestro"
@@ -44,6 +57,30 @@ if [ ! -d "$checkout/.git" ]; then
 fi
 
 flows_root="$checkout/$flows_path"
+if [ "$workspace" = demo_app ] || { [ "$platform" = android ] && [ "$workspace" = wikipedia ]; }; then
+  temporary_workspace="$(mktemp -d "$root/.revyl-maestro/native-conformance.XXXXXX")"
+  trap 'rm -rf -- "$temporary_workspace"' EXIT
+  cp -R "$flows_root" "$temporary_workspace/flows"
+  flows_root="$temporary_workspace/flows"
+  env -u REVYL_API_KEY python3 - "$flows_root" "$workspace" <<'PY'
+import pathlib
+import re
+import sys
+from decimal import Decimal
+root = pathlib.Path(sys.argv[1])
+if sys.argv[2] == "wikipedia":
+    path = root / "subflows/onboarding-android.yaml"
+    text = path.read_text().replace('id: "org.wikipedia:id/fragment_onboarding_forward_button"', 'text: "Forward"')
+else:
+    path = root / "commands/setLocation.yaml"
+    text = path.read_text()
+    for match in re.finditer(r'text: "(Latitude|Longitude): (-?\d+\.\d{6})"', text):
+        coordinate = Decimal(match[2])
+        values = [re.escape(f"{coordinate + Decimal(delta) / 1000000:.6f}") for delta in (-1, 0, 1)]
+        text = text.replace(match[0], f"text: '{match[1]}: ({'|'.join(values)})'")
+path.write_text(text)
+PY
+fi
 if [ "$workspace" = web ] && [ -n "$session" ]; then
   temporary_workspace="$(mktemp -d "$root/.revyl-maestro/web-conformance.XXXXXX")"
   trap 'rm -rf -- "$temporary_workspace"' EXIT
@@ -100,16 +137,24 @@ fi
 
 mkdir -p "$out"
 chmod 700 "$out"
+out="$(cd "$out" && pwd)"
 report="$out/$workspace-$platform${mode:+-compat}.tsv"
-printf 'flow\texpected\tpreflight\tlive\tverdict\n' > "$report"
+if [ "$resume" = false ]; then
+  printf 'flow\texpected\tpreflight\tlive\tverdict\n' > "$report"
+else
+  [ -f "$report" ] || usage
+fi
 other_platforms="$(printf 'android\nios\nweb\n' | grep -vx "$platform" | paste -sd'|')"
 
 while IFS= read -r flow; do
   header="$(awk '/^---/{exit} {print}' "$flow")"
-  expected="$(printf '%s\n' "$header" | grep -oE '^\s*-\s*(passing|failing)\s*$' | tr -d ' -' | head -1 || true)"
+  expected="$(printf '%s\n' "$header" | sed -E 's/[[:space:]]+#.*$//' | grep -oE '^[[:space:]]*-[[:space:]]*(passing|failing)[[:space:]]*$' | tr -d '[:space:]-' || true)"
   [ -n "$expected" ] || continue
-  if printf '%s\n' "$header" | grep -qE "^\s*-\s*($other_platforms)\s*$"; then continue; fi
+  if printf '%s\n' "$header" | grep -qE "^[[:space:]]*-[[:space:]]*($other_platforms)([[:space:]]+#.*|[[:space:]]*)$"; then continue; fi
   name="${flow#"$flows_root/"}"
+  if [ "$session_budget" -ne 0 ] && awk -F'\t' -v name="$name" 'NR>1 && $1==name {found=1} END {exit !found}' "$report"; then continue; fi
+  flow_out="$out/flows/${name%.yaml}"
+  mkdir -p "$flow_out"
   if preflight="$(env -u REVYL_API_KEY "$runner" "${mode[@]}" --validate-only --platform "$platform" "$flow" 2>&1)"; then
     preflight_result="supported"
   else
@@ -117,9 +162,12 @@ while IFS= read -r flow; do
     if [ -z "$preflight_result" ] && printf '%s' "$preflight" | grep -q 'simple parameter references'; then preflight_result="JavaScript"; fi
     preflight_result="unsupported:${preflight_result:-FlowOptionOrHook}"
   fi
+  printf '%s\n' "$preflight" > "$flow_out/preflight.txt"
   live="-" verdict="-"
   if [ -n "$session" ] && [ "$preflight_result" = "supported" ]; then
-    if (cd "$out" && "$runner" "${mode[@]}" --session "$session" --platform "$platform" "$flow" >/dev/null 2>&1); then live="passed"; else live="failed"; fi
+    if [ "$session_budget" -ne 0 ] && [ $((SECONDS + (flow_timeout_ms + 999) / 1000 + 60)) -ge "$session_budget" ]; then exit 75; fi
+    printf '%s\n' "$session" > "$flow_out/session.txt"
+    if (cd "$flow_out" && "$runner" "${mode[@]}" --session "$session" --platform "$platform" "$flow" >stdout.txt 2>stderr.txt); then live="passed"; else live="failed"; fi
     if { [ "$expected" = passing ] && [ "$live" = passed ]; } || { [ "$expected" = failing ] && [ "$live" = failed ]; }; then verdict="ok"; else verdict="mismatch"; fi
   fi
   printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$expected" "$preflight_result" "$live" "$verdict" >> "$report"

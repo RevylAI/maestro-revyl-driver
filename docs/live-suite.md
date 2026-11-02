@@ -52,17 +52,21 @@ manifest entries fail before provisioning. The default pin is `cli-2.10.0`;
 `--maestro-ref REF` selects another simple tag/commit name and is forwarded to
 the harness. A missing checkout is fetched from Maestro's public repository.
 
-For each workspace the suite calls:
+For each workspace/mode session the suite calls:
 
 ```text
 revyl device start --platform PLATFORM --app-url ARTIFACT_URL --open=false --timeout 1800 --json
 ```
 
 After CLI readiness returns a valid `session_id`, the suite runs
-`conformance/maestro-e2e.sh` once in strict mode and once with `--maestro-compat`,
-then stops that session before starting the next workspace. Both modes share
-that workspace's session and run sequentially; this is not an independent
-fresh-state comparison. Use only non-sensitive test apps and flows, close live
+`conformance/maestro-e2e.sh` in strict mode and with `--maestro-compat`, using
+separate sessions for each mode. Each harness batch has a 40-minute budget and
+reserves the full configured flow timeout plus one minute before starting a
+flow. When that reserve no longer fits, it returns 75; the wrapper stops the
+session, starts a fresh one, and continues the same ledger without replaying
+completed flows. Provisioning is bounded to ten minutes, so even a full batch
+and cleanup stay comfortably below the one-hour lifecycle-task limit. Flows in
+a batch still share app state. Use only non-sensitive test apps and flows, close live
 viewers, and do not run concurrent controllers. Compat mode executes upstream
 JavaScript, including its HTTP helper; the normal runner capability and secrecy
 boundaries still apply.
@@ -72,6 +76,24 @@ which covers the upstream demo travel flow at its configured speed. Set this
 environment variable explicitly to a value from 1 through 1800000 milliseconds
 when an authorized run needs a different bound; the runner's own deadline still
 applies to each invocation.
+
+The harness supplies upstream's `MAESTRO_EXAMPLE=test-value` environment and
+recognizes platform tags with inline comments. It copies Android Wikipedia
+fixtures privately to select the installed APK's visible `Forward` control,
+whose old resource ID is absent. Both native setLocation copies retain all four
+coordinate assertions and unchanged requests, allowing only the requested
+six-decimal value or its immediate neighbor (±0.000001°, at most 0.12 m per
+axis). This covers the observed last-digit quantization without accepting
+arbitrary suffixes or dropping latitude/longitude checks. The pinned checkout
+is never modified.
+
+For an already authorized session, `maestro-e2e.sh` remains attach-only. Its
+`--session-budget-seconds 2400` option enables the same bounded continuation:
+after exit 75, add `--resume` and reuse the exact platform, workspace, mode,
+ref, and output directory with a new session. Without `--resume` every
+invocation starts a new ledger, including when a budget is supplied. The
+harness never rotates or stops the supplied session itself; its caller owns
+that session's cleanup.
 
 ## Web
 
@@ -111,7 +133,11 @@ session creation does not prove deployed browser support.
 `--out` must name a new directory. Without it, the suite creates a unique
 `.revyl-maestro/live-suite.*` directory. Reports and runner artifacts are private
 (directories mode 700, files mode 600), separated as `WORKSPACE/strict/` and
-`WORKSPACE/compat/`. Keep custom output paths ignored by Git. Safe summary paths
+`WORKSPACE/compat/`. Within each mode, `flows/FLOW_PATH/` preserves preflight
+output, live stdout/stderr, the session UUID, and the runner's artifacts rather
+than overwriting earlier flows. These are private diagnostics, not public PR
+attachments; inspect and sanitize before sharing. Keep custom output paths
+ignored by Git. Safe summary paths
 and totals are printed on completion; `summary.tsv` and `summary.md` contain a
 row per workspace/mode and a total row:
 
@@ -123,23 +149,24 @@ row per workspace/mode and a total row:
   matches. All-unsupported runs are reported honestly; they do not prove live
   compatibility. Empty or malformed reports fail rather than claim success.
 
-The first start failure, nonzero harness exit, or invalid report aborts later
-work. An EXIT/INT/TERM trap terminates the active child process group, parses any
+The first start failure, harness error other than planned rollover, or invalid
+report aborts later work. An EXIT/INT/TERM trap terminates the active child process group, parses any
 available start response, and attempts to stop the owned session by its exact
 UUID, never `--all`. Git checkout commands have a 120-second bound, start has a
-2100-second bound, each harness invocation has a 7200-second bound, and stop has
+600-second bound, each harness invocation has a 2400-second bound, and stop has
 a 60-second bound. Termination gets five seconds before a process-group kill.
 The CLI's `--timeout 1800` is an idle timeout, not this wrapper's start deadline.
 SIGINT/TERM exit 130/143 when cleanup succeeds. A cleanup failure exits nonzero
 and identifies the session UUID for manual stop; a failed normal stop also gets
 the trap's final cleanup attempt.
 
-Raw start JSON and all CLI/harness stdout/stderr are captured only in a private
+Raw start JSON and CLI/wrapper stdout/stderr are captured only in a private
 temporary directory, never copied into reports or printed on failure. Start JSON
 is deleted immediately after extracting the UUID. CLI execution uses an isolated
 working directory and temporary HOME so cached viewer URLs do not enter the
 project. Temporary response, diagnostics, and CLI state are removed on exit;
-failures print generic diagnostics rather than secret-bearing CLI errors. The
+failures print generic diagnostics rather than secret-bearing CLI errors. Per-flow
+runner diagnostics remain in the private output directory described above. The
 signed demo URL, viewer URL/token, and API key are never written to suite reports.
 
 No local trap can guarantee remote cleanup after SIGKILL, machine loss, a failed
