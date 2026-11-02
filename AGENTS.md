@@ -61,6 +61,12 @@ agent policies do not automatically apply here.
 - Keep API credentials in the process environment only. Never log YAML, selectors,
   provider responses, hierarchy, credentials, or customer content. Keep output
   artifacts private and ignored by Git.
+- `--failure-artifacts` is the opt-in exception for debugging: on failure it may
+  print the failed command path and Maestro's failure reason, and write the
+  failure hierarchy and a screenshot to a new owner-only directory under the
+  private output directory. It stays off by default. Never print typed text,
+  clipboard values, script sources, provider responses, or credentials through it,
+  and never read the session again after an adapter or transport failure.
 - Use authenticated backend routes and the narrowly permitted discovered viewer
   input channel, bounded requests, and no redirects or retries.
   Transport and unsupported-operation errors must not be MaestroException types.
