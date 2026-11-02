@@ -96,6 +96,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
     val scriptsClosed = AtomicBoolean(false)
     val failedCommand = AtomicReference<FailedCommand?>()
     val failureArtifacts = AtomicReference<Pair<Path, List<String>>?>()
+    val capturedFailure = AtomicReference<MaestroException?>()
     var reportFailures = false
     try {
         val invocation = parseInvocation(args)
@@ -161,7 +162,12 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
                             ).runFlow(commands)
                         }
                     } } catch (failure: MaestroException) {
-                        if (invocation.failureArtifacts) failureArtifacts.set(saveFailureArtifacts(failure, driver))
+                        if (invocation.failureArtifacts) {
+                            val directory = newFailureArtifactDirectory()
+                            failureArtifacts.set(directory to listOf("capture did not finish before the flow deadline"))
+                            capturedFailure.set(failure)
+                            failureArtifacts.set(directory to saveFailureArtifacts(failure, driver, directory))
+                        }
                         throw failure
                     }
                     connection.verifyHealthy()
@@ -172,7 +178,7 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
         val success = try { future.get(flowTimeout, TimeUnit.MILLISECONDS) } catch (_: TimeoutException) {
             client.get()?.close()
             future.cancel(true)
-            throw AdapterFailure("Flow execution timed out. An action may have executed; no adapter retry was attempted.")
+            throw capturedFailure.get() ?: AdapterFailure("Flow execution timed out. An action may have executed; no adapter retry was attempted.")
         } catch (failure: ExecutionException) {
             throw failure.cause ?: failure
         }

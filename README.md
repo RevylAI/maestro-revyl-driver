@@ -70,7 +70,8 @@ omitted. On an assertion failure, `hierarchy.json` is the hierarchy Maestro
 evaluated when it gave up; for other Maestro failures it is read afresh.
 `screenshot.png` is taken right after the failure. Each failed run writes a new
 owner-only directory. A file that could not be captured is listed as
-`not captured`. Adapter and transport failures still print only their adapter
+`not captured`. If the flow deadline passes during capture, the original failure
+is still reported and the directory is marked as unfinished. Adapter and transport failures still print only their adapter
 message and, when known, the failed command; the session is not read again after
 them. The flag cannot be combined with `--validate-only`.
 

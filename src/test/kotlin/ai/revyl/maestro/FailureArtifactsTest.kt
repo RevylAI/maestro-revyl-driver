@@ -78,6 +78,22 @@ class FailureArtifactsTest {
         }
     }
 
+    @Test fun `capture that outlasts the flow deadline keeps the original failure`() {
+        LoopbackBackend().use { backend ->
+            val screenshots = java.util.concurrent.atomic.AtomicInteger()
+            backend.intercept = { if (it.path.endsWith("/screenshot") && screenshots.incrementAndGet() > 1) Reply(bytes = ByteArray(0), delayMs = 10_000) else null }
+            val flow = Files.writeString(temporary.resolve("slow.yaml"), "appId: com.example\n---\n- runFlow:\n    commands:\n      - assertTrue: \${1 == 2}\n")
+            val output = ByteArrayOutputStream()
+            val status = runCli(arrayOf("--maestro-compat", "--failure-artifacts", "--session", SESSION, "--platform", "android", flow.toString()),
+                backend.environment + ("REVYL_MAESTRO_FLOW_TIMEOUT_MS" to "3000"), PrintStream(output), PrintStream(output))
+            artifactDirectory(output.toString()).toFile().deleteRecursively()
+            assertEquals(1, status, output.toString())
+            assertTrue(output.toString().contains("Failed command: Run flow > Assert that"), output.toString())
+            assertTrue(listOf("screenshot.png not captured", "capture did not finish before the flow deadline").any { output.toString().contains(it) }, output.toString())
+            assertFalse(output.toString().contains("Flow execution timed out"), output.toString())
+        }
+    }
+
     @Test fun `passing flows write no failure artifacts`() {
         LoopbackBackend().use { backend ->
             val (status, output) = run(backend, "- assertVisible: Continue", "--failure-artifacts")

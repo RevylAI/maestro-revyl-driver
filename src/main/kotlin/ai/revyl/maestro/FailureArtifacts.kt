@@ -30,14 +30,16 @@ internal fun failureDescription(command: MaestroCommand): String = when (command
     else -> command.description()
 }
 
-internal fun saveFailureArtifacts(failure: MaestroException, driver: Driver): Pair<Path, List<String>> {
-    val root = Path.of(PRIVATE_OUTPUT_DIRECTORY)
+internal fun newFailureArtifactDirectory(): Path {
     val stamp = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC).format(Instant.now())
-    val directory = root.resolve(FAILURE_DIRECTORY).resolve("$stamp-${UUID.randomUUID().toString().take(8)}")
+    return Path.of(PRIVATE_OUTPUT_DIRECTORY, FAILURE_DIRECTORY, "$stamp-${UUID.randomUUID().toString().take(8)}")
+}
+
+internal fun saveFailureArtifacts(failure: MaestroException, driver: Driver, directory: Path): List<String> {
     try {
-        listOf(root, directory.parent, directory).forEach(FlowPreflight::privateDirectory)
+        listOf(directory.parent.parent, directory.parent, directory).forEach(FlowPreflight::privateDirectory)
     } catch (_: Exception) {
-        return directory to listOf("directory not created")
+        return listOf("directory not created")
     }
     fun write(name: String, capture: () -> ByteArray): String = try {
         val bytes = capture()
@@ -52,5 +54,5 @@ internal fun saveFailureArtifacts(failure: MaestroException, driver: Driver): Pa
         json.writerWithDefaultPrettyPrinter().writeValueAsBytes(tree)
     }
     val screenshot = write("screenshot.png") { Buffer().also { driver.takeScreenshot(it, false) }.readByteArray() }
-    return directory to listOf(hierarchy, screenshot)
+    return listOf(hierarchy, screenshot)
 }
