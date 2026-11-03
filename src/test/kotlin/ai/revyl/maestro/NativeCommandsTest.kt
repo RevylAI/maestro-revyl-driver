@@ -120,17 +120,17 @@ class NativeCommandsTest {
         LoopbackBackend(platform).use { backend ->
             val (status, output) = run(backend, "- tapOn: {id: continue, repeat: 3, delay: 0}\n- doubleTapOn: {point: '20, 30', delay: 0}\n- doubleTapOn: {id: continue}")
             assertEquals(0, status, output)
-            assertMutations(backend, List(3) { "tap" to mapOf("x" to 50, "y" to 100) } + List(2) { "tap" to mapOf("x" to 20, "y" to 30) } + List(2) { "tap" to mapOf("x" to 50, "y" to 100) })
+            assertMutations(backend, List(3) { "tap" to mapOf("x" to 50, "y" to 100) } + List(2) { "tap" to mapOf("x" to 20, "y" to 30) } + listOf("double_tap" to mapOf("x" to 50, "y" to 100)))
         }
     }
 
     @Test fun `slow tap acknowledgment does not cause adapter replay`() {
         LoopbackBackend().use { backend ->
-            backend.intercept = { if (it.method == "POST") Reply(bytes = "{\"success\":true,\"action\":\"tap\"}".toByteArray(), delayMs = 150) else null }
+            backend.intercept = { if (it.method == "POST" && it.path.endsWith("/double_tap")) Reply(bytes = "{\"success\":true,\"action\":\"double_tap\"}".toByteArray(), delayMs = 300) else null }
             val start = System.nanoTime()
             val (status, output) = run(backend, "- doubleTapOn: {point: '20, 30', delay: 100}")
             assertEquals(0, status, output)
-            assertEquals(2, backend.mutations.size)
+            assertMutations(backend, listOf("double_tap" to mapOf("x" to 20, "y" to 30)))
             assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) >= 300)
         }
     }

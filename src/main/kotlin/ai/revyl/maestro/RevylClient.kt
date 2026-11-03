@@ -236,7 +236,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
     }
 
     private fun actForResult(action: String, body: Map<String, Any>): JsonNode = guard {
-        requireAdapter(action in setOf("tap", "launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag",
+        requireAdapter(action in setOf("tap", "double_tap", "launch", "key", "go_home", "back", "longpress", "set_location", "set_appearance", "open_url", "drag",
             "kill_app", "clear_app_state", "clear_keychain", "set_permissions", "set_orientation",
             "hide_keyboard", "add_media", "set_airplane_mode", "start_screen_recording"), "Unsupported proxy mutation.")
         val capability = when (action) {

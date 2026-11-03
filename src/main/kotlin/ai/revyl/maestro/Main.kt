@@ -152,9 +152,12 @@ fun runCli(args: Array<String>, environment: Map<String, String>, output: PrintS
                                 Maestro(driver),
                                 httpClient = scriptHttp,
                                 jsEngineFactory = { if (invocation.compat) CompatJsEngine(GraalJsEngine(scriptHttp ?: OkHttpClient(), platform), settings.apiKey, validated.dynamicPaths, connection::recordFailure) else GraalJsEngine(platform = platform) },
-                                onCommandStart = { _, _ -> connection.verifyHealthy() },
-                                onCommandComplete = { _, _ -> connection.verifyHealthy() },
+                                onCommandStart = { _, command -> connection.verifyHealthy(); driver.startCommand(command) },
+                                onCommandComplete = { _, _ -> driver.finishCommand(); connection.verifyHealthy() },
+                                onCommandWarned = { _, _ -> driver.finishCommand() },
+                                onCommandSkipped = { _, _ -> driver.finishCommand() },
                                 onCommandFailed = { _, command, failure ->
+                                    driver.finishCommand()
                                     failedCommand.updateAndGet { it.withFailure(command, failure) }
                                     if (failure is AdapterFailure) connection.recordFailure(failure)
                                     throw failure

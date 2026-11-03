@@ -133,7 +133,7 @@ remain unsupported.
 | --- | --- |
 | Native assertions, taps, screenshots, waits | Native selectors and grid coordinates; screenshots stay private. |
 | `longPressOn` | A 3000-ms hold at an element center or literal native/percent point. |
-| `tapOn` with `repeat`, `doubleTapOn` | Intentional, individually acknowledged taps through Maestro's own repeat loop. Counts are 1–100; delays are 0–10000 ms, with at most 120000 ms total requested delay per sequence. Maestro defaults the delay to 100 ms. |
+| `tapOn` with `repeat`, `doubleTapOn` | Native two-tap sequences with Maestro's default 100-ms repeat delay use one existing worker double-tap action, with one fresh bounds check and one report entry. Other sequences use individually acknowledged taps through Maestro's repeat loop. Counts are 1–100; delays are 0–10000 ms, with at most 120000 ms total requested delay per sequence. |
 | `pressKey` | `Enter`, `Backspace`, and `Home`; `Back` and the `back` command are Android-only. The current HTTP Enter/Backspace path supports Android and iOS simulators, not physical iOS. |
 | `eraseText` | Sends 1–100 Backspaces to current focus. Omitted count means 50 Backspaces, not a guarantee that the field is empty. |
 | `inputText`, `pasteText` | Android and iOS input through the existing viewer control WebSocket. Requires a ready, authorized control connection before any flow mutation. See the accepted legacy input limitations below. |
@@ -538,8 +538,10 @@ app-lifecycle capability, the app must already be running and only the
 The adapter does not replay a failed or uncertain request, and stops all remaining
 actions when an acknowledgment fails. **This is not an end-to-end at-most-once
 guarantee:** worker/device providers can retry internally or fall back to another
-transport after partial execution. Repeated HTTP taps, including `doubleTapOn`,
-do not guarantee the platform's native double-tap timing window. Use trusted flows,
+transport after partial execution. Individually acknowledged repeated HTTP taps
+do not guarantee the platform's native double-tap timing window; the default native
+two-tap sequence instead uses the worker's compound gesture and its native spacing.
+Use trusted flows,
 avoid concurrent controllers, and inspect the session before manually retrying a
 timed-out action. Runtime limitations can produce a terminal unsupported response;
 `--platform ios` alone does not establish simulator capabilities.
