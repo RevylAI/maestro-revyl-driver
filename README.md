@@ -51,6 +51,33 @@ build/install/revyl-maestro/bin/revyl-maestro \
 Use `--platform ios` for iOS. A failed assertion or unsupported command exits
 nonzero. The screenshot is saved privately to `.revyl-maestro/smoke.png`;
 delete it or choose a new screenshot name before rerunning.
+
+### Debugging a failed flow
+
+By default a failure prints only a generic message, because selectors and screen
+content can be customer data. Add `--failure-artifacts` to a run to see what failed:
+
+```text
+Maestro assertion or command failed.
+Failed command: Run flow > Assert that id: login_button is visible
+Reason: Assertion is false: id: login_button is visible
+Failure artifacts (private): .revyl-maestro/failures/20261102T203541Z-7f5cafc4 (hierarchy.json, screenshot.png)
+```
+
+`Failed command` lists the enclosing `runFlow` commands, outermost first, then the
+command that failed. Typed text, clipboard values, and `evalScript` sources are
+omitted. On an assertion failure, `hierarchy.json` is the hierarchy Maestro
+evaluated when it gave up; for other Maestro failures it is read afresh.
+`screenshot.png` is taken right after the failure. Each failed run writes a new
+owner-only directory. A file that could not be captured is listed as
+`not captured`. If the flow deadline passes during capture, the original failure
+is still reported and the directory is marked as unfinished. Adapter and transport failures still print only their adapter
+message and, when known, the failed command; the session is not read again after
+them. The flag cannot be combined with `--validate-only`.
+
+The printed command and reason can contain selectors and on-screen text, and the
+artifacts contain the full screen. Keep CI logs that use this flag private, and
+treat the directory like other private output.
 For text input, **close the live Revyl viewer before running the flow**, focus the
 intended field, and do not type secrets through this legacy path. See the input
 limitations below before relying on the result.
