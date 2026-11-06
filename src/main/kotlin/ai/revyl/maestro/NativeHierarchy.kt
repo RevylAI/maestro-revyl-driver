@@ -138,6 +138,12 @@ private class HierarchyParser {
             requireAdapter(value.isBoolean, "Invalid IDB state.")
             return value.booleanValue()
         }
+        fun axValue(): String? {
+            val value = node.get("AXValue") ?: return null
+            if (value.isNull) return null
+            requireAdapter(value.isTextual || value.isNumber || value.isBoolean, "Invalid IDB value.")
+            return value.asText()
+        }
         val frame = node.path("frame")
         val x = coordinate(frame, "x")
         val y = coordinate(frame, "y")
@@ -149,7 +155,7 @@ private class HierarchyParser {
         val attributes = mutableMapOf("bounds" to "[${x.roundToInt()},${y.roundToInt()}][${(x + width).roundToInt()},${(y + height).roundToInt()}]")
         text("AXUniqueId")?.let { attributes["resource-id"] = it }
         text("AXLabel")?.let { attributes["accessibilityText"] = it }
-        (if (editable) text("AXValue") else text("AXLabel") ?: text("AXValue"))?.let { attributes["text"] = it }
+        (if (editable) axValue() else text("AXLabel") ?: axValue())?.let { attributes["text"] = it }
         type?.let { attributes["class"] = it }
         val children = node.get("children")
         requireAdapter(children == null || children.isArray, "Invalid IDB children.")
