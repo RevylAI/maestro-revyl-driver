@@ -167,6 +167,19 @@ class BoundaryTest {
         }
     }
 
+    @Test fun `iOS scalar accessibility values become text and structured values are rejected`() {
+        fun parse(value: String): String? {
+            val body = """[{"type":"Application","frame":{"x":0,"y":0,"width":100,"height":200},"children":[
+                {"type":"RadioButton","AXUniqueId":"home-tab","AXValue":$value,"frame":{"x":0,"y":150,"width":50,"height":50}}]}]"""
+            return NativeHierarchy.parse(body.toByteArray(), "ios").root.children.single().children.single().attributes["text"]
+        }
+        assertEquals("1", parse("1"))
+        assertEquals("true", parse("true"))
+        assertEquals("Home", parse("\"Home\""))
+        assertNull(parse("null"))
+        assertFailsWith<AdapterFailure> { parse("{\"selected\":1}") }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = ["<!DOCTYPE hierarchy [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><hierarchy>&x;</hierarchy>", "<bad/>", "<hierarchy><node bounds='[0,0][100001,1]'/></hierarchy>", "<hierarchy><node bounds='[0,0][1,1]' enabled='maybe'/></hierarchy>"])
     fun `malformed XML entities geometry and states are rejected safely`(body: String) {
