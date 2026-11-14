@@ -62,7 +62,8 @@ internal const val MAX_LAUNCH_ARGUMENT_VALUE_BYTES = 4_096
 private val launchArgumentKeyPattern = Regex("[A-Za-z0-9_.-]{1,128}")
 private val permissionValues = setOf("allow", "deny", "unset")
 private val sharedPermissions = setOf("all", "calendar", "camera", "contacts", "location", "medialibrary", "microphone", "notifications", "photos")
-internal val extendedIosPermissions = setOf("camera", "notifications", "health", "homekit", "speech", "userTracking")
+internal val extendedIosPermissions = setOf("camera", "health", "homekit", "speech")
+internal val alertAnsweredIosPermissions = setOf("notifications", "userTracking")
 
 internal fun requiresExtendedIosPermissions(permissions: Map<String, String>?): Boolean =
     permissions?.keys?.any { it in extendedIosPermissions || it.contains("\${") } == true

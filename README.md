@@ -431,13 +431,33 @@ is targeted at an explicit app ID; nothing acts on whichever app is in front.
 | `setPermissions` | `supports_app_lifecycle` | Maestro permission names with `allow`, `deny`, or `unset`. Android also accepts fully qualified `*.permission.*` names. Names that do not exist on the platform fail preflight. |
 | `setOrientation` | `supports_precise_orientation` | `PORTRAIT`, `LANDSCAPE_LEFT`, `LANDSCAPE_RIGHT`, or `UPSIDE_DOWN`, applied exactly or not at all. |
 
-Explicit iOS `camera`, `notifications`, `health`, `homekit`, `speech`, and
-`userTracking` names additionally require `supports_extended_ios_permissions`.
+Explicit iOS `camera`, `health`, `homekit`, and `speech` names additionally
+require `supports_extended_ios_permissions`. Explicit iOS `notifications` and
+`userTracking` are forwarded to the worker only when that flag is strictly true;
+otherwise the driver applies them by answering the app's permission alert, as
+below, and sends the rest of the request unchanged.
 For iOS `all` (including Maestro's default launch permissions), that flag is
 optional: missing, false, or malformed means the worker's supported legacy subset,
 not a claim that every extended permission changed. A strict true flag enables
 the worker's extended set. The driver still forwards `{all: allow|deny|unset}`;
 the worker owns platform expansion. Explicit named requests never silently degrade.
+
+On iOS, explicitly named `allow` and `deny` values are also applied to the app's
+permission alerts, because simulator grants don't always take effect and
+`notifications` and `userTracking` have no worker grant without the extended
+flag. For 60 seconds after each `launchApp` of that app, every hierarchy read
+looks for a system permission alert: a refusal button (`Don't Allow`, `Ask App
+Not to Track`, `Keep Only While Using`) with an acceptance button within 200
+points of it. The alert's system wording names its permission, and the driver
+taps the button for the answer the flow gave that permission (for location
+`allow`, While Using and then Always), at most 8 times per launch, before
+returning the hierarchy to Maestro. Alerts for permissions the flow did not
+name are left on screen, `unset` and `{all: unset}` (including `clearState`)
+forget earlier answers, and `{all: allow|deny}`, Maestro's default launch
+permissions, answers nothing, so flows that don't name permissions still see
+the real prompts. Only English alert wording is recognized, an alert that
+appears after the window or that no hierarchy read sees is not answered, and
+failure artifacts never answer alerts.
 
 `androidWebViewHierarchy: devtools` is supported in both modes and requires
 `supports_webview_hierarchy` before any mutation. This is the only related flow

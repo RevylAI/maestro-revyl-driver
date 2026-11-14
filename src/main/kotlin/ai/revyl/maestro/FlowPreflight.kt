@@ -465,8 +465,8 @@ object FlowPreflight {
         if (platform != "ios") return emptySet()
         return if (allCommands(commands).any {
             when (val command = it.asCommand()) {
-                is LaunchAppCommand -> command.permissions?.containsKey("all") != false
-                is SetPermissionsCommand -> "all" in command.permissions
+                is LaunchAppCommand -> command.permissions?.let { "all" in it || it.keys.any(alertAnsweredIosPermissions::contains) } != false
+                is SetPermissionsCommand -> "all" in command.permissions || command.permissions.keys.any(alertAnsweredIosPermissions::contains)
                 is ClearStateCommand -> true
                 else -> false
             }

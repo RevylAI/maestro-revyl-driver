@@ -36,7 +36,12 @@ agent policies do not automatically apply here.
   Missing or malformed capabilities must fail closed. Preserve requested gesture
   duration, and validate dynamically copied text before viewer input.
 - Require the process-death, WebView, and explicit extended-iOS-permission
-  capabilities before mutation. The approved iOS `all` exception uses the
+  capabilities before mutation. The approved iOS `notifications` and
+  `userTracking` exception applies those names by answering the app's system
+  permission alert during hierarchy reads after a launch, using only the
+  existing hierarchy and tap routes, when the extended flag is absent; never tap
+  without a refusal and acceptance pair, or for a permission the flow did not
+  name. The approved iOS `all` exception uses the
   worker's supported legacy subset when the extended-permission flag is absent;
   never describe that result as confirming all extended permissions changed.
 - Web sessions require the strict `supports_maestro_web` capability before any
