@@ -36,6 +36,8 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     private var recording: ScreenRecording? = null
     private var compoundDoubleTap = false
     private var pendingDoubleTapPoint: Point? = null
+    private val permissionAnswersByApp = mutableMapOf<String, MutableMap<String, String>>()
+    private var permissionAlertWatch: PermissionAlertWatch? = null
     private val recordingTimer = Executors.newSingleThreadScheduledExecutor { runnable -> Thread(runnable, "revyl-recording-deadline").apply { isDaemon = true } }
 
     override fun name(): String = "Revyl (native subset)"
@@ -74,7 +76,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     override fun contentDescriptor(excludeKeyboardElements: Boolean): TreeNode = client.guard {
         if (platform == "web") return@guard WebHierarchy.parse(client.webRead("maestro_web_hierarchy"))
         if (excludeKeyboardElements) unsupported()
-        val native = NativeHierarchy.parse(client.read("hierarchy"), platform).root
+        val native = if (platform == "ios") iosRootAfterAnsweringPermissionAlerts() else NativeHierarchy.parse(client.read("hierarchy"), platform).root
         if (!chromeDevToolsEnabled || native.aggregate().none { it.attributes["class"] == "android.webkit.WebView" }) return@guard native
         AndroidWebViewHierarchyClient.mergeHierarchies(native, parseWebViewNodes(client.readState("webview_hierarchy")))
     }
@@ -87,9 +89,13 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
             return@guard client.webAct("maestro_web_launch", mapOf("url" to appId, "arguments" to launchArguments))
         }
         requireAdapter(appIdPattern.matches(appId), "Launch requires a native bundle or package ID.")
-        if (launchArguments.isEmpty()) return@guard client.act("launch", mapOf("bundle_id" to appId))
-        requireLaunchArguments(launchArguments)
-        client.act("launch", mapOf("bundle_id" to appId, "arguments" to launchArguments))
+        if (launchArguments.isEmpty()) {
+            client.act("launch", mapOf("bundle_id" to appId))
+        } else {
+            requireLaunchArguments(launchArguments)
+            client.act("launch", mapOf("bundle_id" to appId, "arguments" to launchArguments))
+        }
+        if (platform == "ios") watchPermissionAlertsAfterLaunch(appId)
     }
 
     override fun setPermissions(appId: String, permissions: Map<String, String>) = client.guard {
@@ -97,8 +103,41 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         if (permissions.isEmpty()) return@guard
         requireAppId(appId)
         requirePermissions(permissions, platform)
-        client.act("set_permissions", mapOf("bundle_id" to appId, "permissions" to permissions))
+        val forwarded = if (platform == "ios" && !client.hasVerifiedCapability(WorkerCapability.EXTENDED_IOS_PERMISSIONS)) {
+            permissions - alertAnsweredIosPermissions
+        } else permissions
+        if (forwarded.isNotEmpty()) client.act("set_permissions", mapOf("bundle_id" to appId, "permissions" to forwarded))
+        if (platform == "ios") permissionAnswersByApp.getOrPut(appId) { mutableMapOf() }.recordPermissionAnswers(permissions)
     }
+
+    internal fun stopAnsweringPermissionAlerts() {
+        permissionAlertWatch = null
+    }
+
+    private fun watchPermissionAlertsAfterLaunch(appId: String) {
+        permissionAlertWatch = permissionAnswersByApp[appId]?.takeIf { it.isNotEmpty() }?.let {
+            PermissionAlertWatch(appId, System.nanoTime() + PERMISSION_ALERT_WINDOW_MS * 1_000_000, PERMISSION_ALERT_MAX_ANSWERS_PER_LAUNCH)
+        }
+    }
+
+    private fun iosRootAfterAnsweringPermissionAlerts(): TreeNode {
+        var hierarchy = NativeHierarchy.parse(client.read("hierarchy"), platform)
+        val watch = permissionAlertWatch ?: return hierarchy.root
+        while (watch.answersLeft > 0 && System.nanoTime() < watch.deadlineNanos) {
+            val answers = permissionAnswersByApp[watch.appId].orEmpty()
+            val tap = findPermissionAlertTap(hierarchy.root, answers) ?: break
+            val width = hierarchy.widthPoints ?: break
+            val height = hierarchy.heightPoints ?: break
+            if (tap.x !in 0 until width || tap.y !in 0 until height) break
+            watch.answersLeft--
+            client.act("tap", mapOf("x" to tap.x, "y" to tap.y))
+            Thread.sleep(PERMISSION_ALERT_SETTLE_MS)
+            hierarchy = NativeHierarchy.parse(client.read("hierarchy"), platform)
+        }
+        return hierarchy.root
+    }
+
+    private class PermissionAlertWatch(val appId: String, val deadlineNanos: Long, var answersLeft: Int)
 
     override fun setAndroidChromeDevToolsEnabled(enabled: Boolean) = client.guard {
         if (enabled) {

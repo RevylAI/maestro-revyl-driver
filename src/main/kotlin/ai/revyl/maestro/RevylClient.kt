@@ -162,6 +162,8 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         verifiedCapabilities = requiredCapabilities + optional.filter { health.path(it.field).isBoolean && health.path(it.field).booleanValue() }
     }
 
+    internal fun hasVerifiedCapability(capability: WorkerCapability): Boolean = capability in verifiedCapabilities
+
     fun read(action: String): ByteArray {
         requireAdapter(action in setOf("hierarchy", "screenshot"), "Unsupported proxy read.")
         return request("device-proxy/${attachedWorkflow()}/$action")
@@ -254,7 +256,7 @@ class RevylClient(private val settings: ConnectionSettings, private val deadline
         requireAdapter(capability == null || capability in verifiedCapabilities, "Required worker capability has not been verified; no mutation was sent.")
         if (action == "set_permissions" && attachedPlatform == "ios") {
             val permissions = body["permissions"] as? Map<*, *> ?: throw AdapterFailure("Permissions require a map.")
-            requireAdapter(permissions.keys.none { it in extendedIosPermissions } || WorkerCapability.EXTENDED_IOS_PERMISSIONS in verifiedCapabilities,
+            requireAdapter(permissions.keys.none { it in extendedIosPermissions || it in alertAnsweredIosPermissions } || WorkerCapability.EXTENDED_IOS_PERMISSIONS in verifiedCapabilities,
                 "Required iOS permission capability has not been verified; no mutation was sent.")
         }
         val result = readJson(request("device-proxy/${attachedWorkflow()}/$action", body,

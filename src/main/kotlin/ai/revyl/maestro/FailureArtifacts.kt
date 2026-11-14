@@ -36,6 +36,7 @@ internal fun newFailureArtifactDirectory(): Path {
 }
 
 internal fun saveFailureArtifacts(failure: MaestroException, driver: Driver, directory: Path): List<String> {
+    (driver as? RevylDriver)?.stopAnsweringPermissionAlerts()
     try {
         listOf(directory.parent.parent, directory.parent, directory).forEach(FlowPreflight::privateDirectory)
     } catch (_: Exception) {

@@ -313,7 +313,7 @@ class ApprovedGapsTest {
                 Triple("ios", "- setPermissions: {permissions: {all: allow}}", "supports_app_lifecycle"),
             ).plus(listOf("PORTRAIT", "LANDSCAPE_LEFT", "LANDSCAPE_RIGHT", "UPSIDE_DOWN").map {
                 Triple("ios", "- setOrientation: $it", "supports_precise_orientation")
-            }).plus(listOf("camera", "notifications", "health", "homekit", "speech", "userTracking").flatMap {
+            }).plus(listOf("camera", "health", "homekit", "speech").flatMap {
                 listOf(
                     Triple("ios", "- setPermissions: {permissions: {$it: allow}}", "supports_extended_ios_permissions"),
                     Triple("ios", "- launchApp: {clearState: true, clearKeychain: true, permissions: {$it: allow}}", "supports_extended_ios_permissions"),
