@@ -455,7 +455,11 @@ returning the hierarchy to Maestro. Alerts for permissions the flow did not
 name are left on screen, `unset` and `{all: unset}` (including `clearState`)
 forget earlier answers, and `{all: allow|deny}`, Maestro's default launch
 permissions, answers nothing, so flows that don't name permissions still see
-the real prompts. Only English alert wording is recognized (checked against
+the real prompts. Each `setPermissions`, including the one inside `launchApp`,
+first answers the alerts already on screen for the permissions it names, then
+forwards the grant: an alert left over from an earlier launch survives the
+app's restart and would overwrite the grant when answered later, leaving
+location at While Using instead of Always. Only English alert wording is recognized (checked against
 the iOS 18.5, 26.2, 26.5 and 27.0 simulator runtimes), an alert that
 appears after the window or that no hierarchy read sees is not answered, and
 failure artifacts never answer alerts.

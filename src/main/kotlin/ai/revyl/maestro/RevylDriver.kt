@@ -106,8 +106,11 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         val forwarded = if (platform == "ios" && !client.hasVerifiedCapability(WorkerCapability.EXTENDED_IOS_PERMISSIONS)) {
             permissions - alertAnsweredIosPermissions
         } else permissions
+        if (platform == "ios") {
+            permissionAnswersByApp.getOrPut(appId) { mutableMapOf() }.recordPermissionAnswers(permissions)
+            newPermissionAlertWatch(appId)?.let(::answerPermissionAlerts)
+        }
         if (forwarded.isNotEmpty()) client.act("set_permissions", mapOf("bundle_id" to appId, "permissions" to forwarded))
-        if (platform == "ios") permissionAnswersByApp.getOrPut(appId) { mutableMapOf() }.recordPermissionAnswers(permissions)
     }
 
     internal fun stopAnsweringPermissionAlerts() {
@@ -115,14 +118,18 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     }
 
     private fun watchPermissionAlertsAfterLaunch(appId: String) {
-        permissionAlertWatch = permissionAnswersByApp[appId]?.takeIf { it.isNotEmpty() }?.let {
-            PermissionAlertWatch(appId, System.nanoTime() + PERMISSION_ALERT_WINDOW_MS * 1_000_000, PERMISSION_ALERT_MAX_ANSWERS_PER_LAUNCH)
-        }
+        permissionAlertWatch = newPermissionAlertWatch(appId)
     }
 
-    private fun iosRootAfterAnsweringPermissionAlerts(): TreeNode {
+    private fun newPermissionAlertWatch(appId: String): PermissionAlertWatch? = permissionAnswersByApp[appId]?.takeIf { it.isNotEmpty() }?.let {
+        PermissionAlertWatch(appId, System.nanoTime() + PERMISSION_ALERT_WINDOW_MS * 1_000_000, PERMISSION_ALERT_MAX_ANSWERS_PER_LAUNCH)
+    }
+
+    private fun iosRootAfterAnsweringPermissionAlerts(): TreeNode =
+        permissionAlertWatch?.let(::answerPermissionAlerts) ?: NativeHierarchy.parse(client.read("hierarchy"), platform).root
+
+    private fun answerPermissionAlerts(watch: PermissionAlertWatch): TreeNode {
         var hierarchy = NativeHierarchy.parse(client.read("hierarchy"), platform)
-        val watch = permissionAlertWatch ?: return hierarchy.root
         while (watch.answersLeft > 0 && System.nanoTime() < watch.deadlineNanos) {
             val answers = permissionAnswersByApp[watch.appId].orEmpty()
             val tap = findPermissionAlertTap(hierarchy.root, answers) ?: break

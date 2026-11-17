@@ -73,6 +73,19 @@ class PermissionAlertsTest {
         }
     }
 
+    @Test
+    fun `alert left from an earlier launch is answered before the grant it would overwrite`() {
+        LoopbackBackend("ios").use { backend ->
+            serveScreens(backend, listOf(locationAlert, readyScreen))
+            val (status, output) = run(backend, "- launchApp: {permissions: {location: allow}}\n- assertVisible: Ready")
+            assertEquals(0, status, output)
+            assertEquals(listOf(220 to 539), taps(backend))
+            val order = backend.mutations.map { it.path.substringAfterLast('/') }
+            assert(order.indexOf("tap") < order.indexOf("set_permissions")) { order.toString() }
+            assert(order.indexOf("set_permissions") < order.lastIndexOf("launch")) { order.toString() }
+        }
+    }
+
     private companion object {
         fun frame(x: Number, y: Number, width: Number, height: Number) = mapOf("x" to x, "y" to y, "width" to width, "height" to height)
 
