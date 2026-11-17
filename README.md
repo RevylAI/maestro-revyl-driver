@@ -455,7 +455,8 @@ returning the hierarchy to Maestro. Alerts for permissions the flow did not
 name are left on screen, `unset` and `{all: unset}` (including `clearState`)
 forget earlier answers, and `{all: allow|deny}`, Maestro's default launch
 permissions, answers nothing, so flows that don't name permissions still see
-the real prompts. Only English alert wording is recognized, an alert that
+the real prompts. Only English alert wording is recognized (checked against
+the iOS 18.5, 26.2, 26.5 and 27.0 simulator runtimes), an alert that
 appears after the window or that no hierarchy read sees is not answered, and
 failure artifacts never answer alerts.
 
