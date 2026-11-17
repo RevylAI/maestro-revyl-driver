@@ -75,6 +75,12 @@ is still reported and the directory is marked as unfinished. Adapter and transpo
 message and, when known, the failed command; the session is not read again after
 them. The flag cannot be combined with `--validate-only`.
 
+An invalid native hierarchy reports the driver's fixed parser reason, for example
+`Revyl returned an invalid native hierarchy: Invalid IDB viewport.`, never hierarchy
+content. While an iOS app is still starting, IDB can return only an empty 0×0 root
+with no children; the driver reads the hierarchy again with backoff for up to 8
+seconds and then fails with an error naming that empty root.
+
 The printed command and reason can contain selectors and on-screen text, and the
 artifacts contain the full screen. Keep CI logs that use this flag private, and
 treat the directory like other private output.

@@ -64,7 +64,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         val width = ByteBuffer.wrap(png, 16, 4).int
         val height = ByteBuffer.wrap(png, 20, 4).int
         if (platform == "android") return@guard DeviceInfo(Platform.ANDROID, width, height, width, height)
-        val hierarchy = NativeHierarchy.parse(client.read("hierarchy"), platform)
+        val hierarchy = readNativeHierarchy()
         val widthPoints = hierarchy.widthPoints ?: throw AdapterFailure("Missing iOS point viewport.")
         val heightPoints = hierarchy.heightPoints ?: throw AdapterFailure("Missing iOS point viewport.")
         val scaleX = width.toDouble() / widthPoints
@@ -76,7 +76,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     override fun contentDescriptor(excludeKeyboardElements: Boolean): TreeNode = client.guard {
         if (platform == "web") return@guard WebHierarchy.parse(client.webRead("maestro_web_hierarchy"))
         if (excludeKeyboardElements) unsupported()
-        val native = if (platform == "ios") iosRootAfterAnsweringPermissionAlerts() else NativeHierarchy.parse(client.read("hierarchy"), platform).root
+        val native = if (platform == "ios") iosRootAfterAnsweringPermissionAlerts() else readNativeHierarchy().root
         if (!chromeDevToolsEnabled || native.aggregate().none { it.attributes["class"] == "android.webkit.WebView" }) return@guard native
         AndroidWebViewHierarchyClient.mergeHierarchies(native, parseWebViewNodes(client.readState("webview_hierarchy")))
     }
@@ -130,11 +130,25 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         return watch.onlyFor?.let { names -> answers.filterKeys(names::contains) } ?: answers
     }
 
+    private fun readNativeHierarchy(): NativeHierarchy {
+        val deadlineNanos = System.nanoTime() + IOS_EMPTY_ROOT_WAIT_MS * 1_000_000
+        var delayMs = 250L
+        while (true) {
+            try {
+                return NativeHierarchy.parse(client.read("hierarchy"), platform)
+            } catch (_: IosHierarchyNotReady) {
+                if (System.nanoTime() + delayMs * 1_000_000 > deadlineNanos) throw IosHierarchyNotReadyTimeout()
+                Thread.sleep(delayMs)
+                delayMs = minOf(delayMs * 2, 2_000L)
+            }
+        }
+    }
+
     private fun iosRootAfterAnsweringPermissionAlerts(): TreeNode =
-        permissionAlertWatch?.let(::answerPermissionAlerts) ?: NativeHierarchy.parse(client.read("hierarchy"), platform).root
+        permissionAlertWatch?.let(::answerPermissionAlerts) ?: readNativeHierarchy().root
 
     private fun answerPermissionAlerts(watch: PermissionAlertWatch): TreeNode {
-        var hierarchy = NativeHierarchy.parse(client.read("hierarchy"), platform)
+        var hierarchy = readNativeHierarchy()
         while (watch.answersLeft > 0 && System.nanoTime() < watch.deadlineNanos) {
             val tap = findPermissionAlertTap(hierarchy.root, watchedAnswers(watch)) ?: break
             val width = hierarchy.widthPoints ?: break
@@ -143,7 +157,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
             watch.answersLeft--
             client.act("tap", mapOf("x" to tap.x, "y" to tap.y))
             Thread.sleep(PERMISSION_ALERT_SETTLE_MS)
-            hierarchy = NativeHierarchy.parse(client.read("hierarchy"), platform)
+            hierarchy = readNativeHierarchy()
         }
         return hierarchy.root
     }

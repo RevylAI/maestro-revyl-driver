@@ -74,7 +74,12 @@ agent policies do not automatically apply here.
   clipboard values, script sources, provider responses, or credentials through it,
   and never read the session again after an adapter or transport failure.
 - Use authenticated backend routes and the narrowly permitted discovered viewer
-  input channel, bounded requests, and no redirects or retries.
+  input channel, bounded requests, and no redirects or retries. The approved iOS
+  empty-root exception re-reads the hierarchy, never a mutation, only while every
+  IDB root is 0×0 with no children (an app still starting), with bounded backoff
+  for at most 8 seconds before a timeout failure that names that shape. Every
+  other invalid hierarchy fails at once, and its fixed parser reason, never
+  provider content, stays in the error.
   Transport and unsupported-operation errors must not be MaestroException types.
   Do not infer provider at-most-once execution from adapter no-replay behavior.
 - Test through real Maestro YAML and Orchestra against loopback fixtures. Passing

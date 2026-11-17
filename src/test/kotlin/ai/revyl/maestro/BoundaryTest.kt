@@ -3,6 +3,7 @@ package ai.revyl.maestro
 import maestro.MaestroException
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
 import java.nio.ByteBuffer
 import java.util.concurrent.TimeUnit
@@ -181,10 +182,15 @@ class BoundaryTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["<!DOCTYPE hierarchy [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><hierarchy>&x;</hierarchy>", "<bad/>", "<hierarchy><node bounds='[0,0][100001,1]'/></hierarchy>", "<hierarchy><node bounds='[0,0][1,1]' enabled='maybe'/></hierarchy>"])
-    fun `malformed XML entities geometry and states are rejected safely`(body: String) {
+    @CsvSource(delimiter = '|', quoteCharacter = '"', value = [
+        "<!DOCTYPE hierarchy [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><hierarchy>&x;</hierarchy>|SAXParseException.",
+        "<bad/>|Expected UIAutomator hierarchy.",
+        "<hierarchy><node bounds='[0,0][100001,1]'/></hierarchy>|Invalid native bounds.",
+        "<hierarchy><node bounds='[0,0][1,1]' enabled='maybe'/></hierarchy>|Invalid native state.",
+    ])
+    fun `malformed XML entities geometry and states are rejected safely with a fixed cause`(body: String, cause: String) {
         val failure = assertFailsWith<AdapterFailure> { NativeHierarchy.parse(body.toByteArray(), "android") }
-        assertEquals("Revyl returned an invalid native hierarchy.", failure.message)
+        assertEquals("Revyl returned an invalid native hierarchy: $cause", failure.message)
     }
 
     @ParameterizedTest

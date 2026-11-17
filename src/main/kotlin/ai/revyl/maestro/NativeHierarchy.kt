@@ -19,11 +19,23 @@ data class NativeHierarchy(val root: TreeNode, val widthPoints: Int?, val height
                 "ios" -> parser.ios(bytes)
                 else -> unsupported()
             }
-        } catch (_: Exception) {
-            throw AdapterFailure("Revyl returned an invalid native hierarchy.")
+        } catch (notReady: IosHierarchyNotReady) {
+            throw notReady
+        } catch (failure: AdapterFailure) {
+            throw AdapterFailure("Revyl returned an invalid native hierarchy: ${failure.message}")
+        } catch (failure: Exception) {
+            throw AdapterFailure("Revyl returned an invalid native hierarchy: ${failure.javaClass.simpleName}.")
         }
     }
 }
+
+/** IDB returned only empty 0×0 roots with no children, which it does while an app is still starting. */
+internal class IosHierarchyNotReady : AdapterFailure("Revyl returned an iOS hierarchy that is only an empty 0×0 root with no children.")
+
+internal const val IOS_EMPTY_ROOT_WAIT_MS = 8_000L
+
+internal class IosHierarchyNotReadyTimeout :
+    AdapterFailure("Revyl's iOS hierarchy was still only an empty 0×0 Application root with no children after waiting ${IOS_EMPTY_ROOT_WAIT_MS / 1000} seconds; the app may not have finished starting.")
 
 private class HierarchyParser {
     private var count = 0
@@ -107,6 +119,7 @@ private class HierarchyParser {
     fun ios(bytes: ByteArray): NativeHierarchy {
         val roots = RevylClient.readJson(bytes)
         requireAdapter(roots.isArray && !roots.isEmpty, "Expected IDB hierarchy roots.")
+        if (roots.all(::isEmptyRoot)) throw IosHierarchyNotReady()
         val nodes = roots.map { iosNode(it, 0) }
         val frames = roots.map { it.path("frame") }
         val viewport = frames.maxBy { coordinate(it, "width") * coordinate(it, "height") }
@@ -115,6 +128,14 @@ private class HierarchyParser {
         val height = coordinate(viewport, "height").roundToInt()
         requireAdapter(width > 0 && height > 0, "Invalid IDB viewport.")
         return NativeHierarchy(TreeNode(children = nodes), width, height)
+    }
+
+    private fun isEmptyRoot(root: JsonNode): Boolean {
+        val frame = root.path("frame")
+        val children = root.path("children")
+        return root.isObject && frame.path("width").isNumber && frame.path("width").doubleValue() == 0.0 &&
+            frame.path("height").isNumber && frame.path("height").doubleValue() == 0.0 &&
+            (children.isMissingNode || children.isNull || (children.isArray && children.isEmpty))
     }
 
     private fun coordinate(frame: JsonNode, name: String): Double {

@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-class AdapterFailure(message: String) : RuntimeException(message)
+open class AdapterFailure(message: String) : RuntimeException(message)
 
 internal val json = jacksonObjectMapper()
     .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
