@@ -448,7 +448,8 @@ permission alerts, because simulator grants don't always take effect and
 flag. For 60 seconds after each `launchApp` of that app, every hierarchy read
 looks for a system permission alert: a refusal button (`Don't Allow`, `Ask App
 Not to Track`, `Keep Only While Using`) with an acceptance button within 200
-points of it. The alert's system wording names its permission, and the driver
+points of it. The alert's system title names its permission (the app's usage
+description is never read), and the driver
 taps the button for the answer the flow gave that permission (for location
 `allow`, While Using and then Always), at most 8 times per launch, before
 returning the hierarchy to Maestro. Alerts for permissions the flow did not
