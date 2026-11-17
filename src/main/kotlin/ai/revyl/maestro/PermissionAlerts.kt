@@ -20,18 +20,22 @@ private val permissionByAlertPhrase = listOf(
     "track your activity" to "userTracking",
     "send you notifications" to "notifications",
     "use your location" to "location",
-    "motion & fitness" to "motion",
+    "fitness activity" to "motion",
     "access the camera" to "camera",
+    "access your camera" to "camera",
     "access the microphone" to "microphone",
-    "access your contacts" to "contacts",
+    "access your microphone" to "microphone",
+    "your contacts" to "contacts",
     "your calendar" to "calendar",
     "your reminders" to "reminders",
-    "your photos" to "photos",
+    "your photo" to "photos",
+    "your home data" to "homekit",
     "apple music" to "medialibrary",
     "use bluetooth" to "bluetooth",
     "speech recognition" to "speech",
     "use siri" to "siri",
 )
+private val alertTitlePattern = Regex("^(allow (widgets from )?[\"\u201c].+[\"\u201d] |[\"\u201c].+[\"\u201d] would like )")
 private val boundsPattern = Regex("\\[(-?\\d+),(-?\\d+)]\\[(-?\\d+),(-?\\d+)]")
 
 internal data class PermissionAlertTap(val permission: String, val answer: String, val x: Int, val y: Int)
@@ -44,8 +48,9 @@ private data class LabeledPoint(val label: String, val x: Double, val y: Double)
  * Finds the button that answers an iOS permission alert the way the flow asked.
  *
  * An alert is a refusal button with an acceptance button within one alert's
- * reach. Its permission comes from the system wording of nearby text, and an
- * alert for a permission the flow did not name is left on screen.
+ * reach. Its permission comes from the system wording of the alert's title
+ * ("Allow “App” …" or "“App” Would Like …"), never from the app's usage
+ * description, and an alert for a permission the flow did not name is left on screen.
  */
 internal fun findPermissionAlertTap(root: TreeNode, answers: Map<String, String>): PermissionAlertTap? {
     if (answers.isEmpty()) return null
@@ -55,8 +60,9 @@ internal fun findPermissionAlertTap(root: TreeNode, answers: Map<String, String>
     val acceptances = buttons.filter { it.label in acceptanceLabels }
     for (refusal in buttons.filter { it.label in refusalLabels }) {
         if (acceptances.none { it.distanceTo(refusal) <= ALERT_BUTTON_REACH_POINTS }) continue
-        val nearbyText = texts.filter { it.distanceTo(refusal) <= ALERT_TEXT_REACH_POINTS }.map { it.label.lowercase() }
-        val permission = permissionByAlertPhrase.firstOrNull { (phrase, _) -> nearbyText.any { phrase in it } }?.second ?: continue
+        val titles = texts.filter { it.distanceTo(refusal) <= ALERT_TEXT_REACH_POINTS }.map { it.label.lowercase() }
+            .filter { alertTitlePattern.containsMatchIn(it) }
+        val permission = permissionByAlertPhrase.firstOrNull { (phrase, _) -> titles.any { phrase in it } }?.second ?: continue
         val answer = answers[permission] ?: continue
         for (label in buttonsByAnswer.getValue(answer)) {
             val button = buttons.filter { it.label == label && it.distanceTo(refusal) <= ALERT_BUTTON_REACH_POINTS }

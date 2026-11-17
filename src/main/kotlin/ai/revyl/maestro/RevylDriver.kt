@@ -106,8 +106,11 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         val forwarded = if (platform == "ios" && !client.hasVerifiedCapability(WorkerCapability.EXTENDED_IOS_PERMISSIONS)) {
             permissions - alertAnsweredIosPermissions
         } else permissions
+        if (platform == "ios") {
+            permissionAnswersByApp.getOrPut(appId) { mutableMapOf() }.recordPermissionAnswers(permissions)
+            newPermissionAlertWatch(appId, onlyFor = permissions.keys)?.let(::answerPermissionAlerts)
+        }
         if (forwarded.isNotEmpty()) client.act("set_permissions", mapOf("bundle_id" to appId, "permissions" to forwarded))
-        if (platform == "ios") permissionAnswersByApp.getOrPut(appId) { mutableMapOf() }.recordPermissionAnswers(permissions)
     }
 
     internal fun stopAnsweringPermissionAlerts() {
@@ -115,17 +118,25 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
     }
 
     private fun watchPermissionAlertsAfterLaunch(appId: String) {
-        permissionAlertWatch = permissionAnswersByApp[appId]?.takeIf { it.isNotEmpty() }?.let {
-            PermissionAlertWatch(appId, System.nanoTime() + PERMISSION_ALERT_WINDOW_MS * 1_000_000, PERMISSION_ALERT_MAX_ANSWERS_PER_LAUNCH)
-        }
+        permissionAlertWatch = newPermissionAlertWatch(appId)
     }
 
-    private fun iosRootAfterAnsweringPermissionAlerts(): TreeNode {
+    private fun newPermissionAlertWatch(appId: String, onlyFor: Set<String>? = null): PermissionAlertWatch? =
+        PermissionAlertWatch(appId, System.nanoTime() + PERMISSION_ALERT_WINDOW_MS * 1_000_000, PERMISSION_ALERT_MAX_ANSWERS_PER_LAUNCH, onlyFor)
+            .takeIf { watchedAnswers(it).isNotEmpty() }
+
+    private fun watchedAnswers(watch: PermissionAlertWatch): Map<String, String> {
+        val answers = permissionAnswersByApp[watch.appId].orEmpty()
+        return watch.onlyFor?.let { names -> answers.filterKeys(names::contains) } ?: answers
+    }
+
+    private fun iosRootAfterAnsweringPermissionAlerts(): TreeNode =
+        permissionAlertWatch?.let(::answerPermissionAlerts) ?: NativeHierarchy.parse(client.read("hierarchy"), platform).root
+
+    private fun answerPermissionAlerts(watch: PermissionAlertWatch): TreeNode {
         var hierarchy = NativeHierarchy.parse(client.read("hierarchy"), platform)
-        val watch = permissionAlertWatch ?: return hierarchy.root
         while (watch.answersLeft > 0 && System.nanoTime() < watch.deadlineNanos) {
-            val answers = permissionAnswersByApp[watch.appId].orEmpty()
-            val tap = findPermissionAlertTap(hierarchy.root, answers) ?: break
+            val tap = findPermissionAlertTap(hierarchy.root, watchedAnswers(watch)) ?: break
             val width = hierarchy.widthPoints ?: break
             val height = hierarchy.heightPoints ?: break
             if (tap.x !in 0 until width || tap.y !in 0 until height) break
@@ -137,7 +148,7 @@ class RevylDriver(private val client: RevylClient, private val platform: String)
         return hierarchy.root
     }
 
-    private class PermissionAlertWatch(val appId: String, val deadlineNanos: Long, var answersLeft: Int)
+    private class PermissionAlertWatch(val appId: String, val deadlineNanos: Long, var answersLeft: Int, val onlyFor: Set<String>?)
 
     override fun setAndroidChromeDevToolsEnabled(enabled: Boolean) = client.guard {
         if (enabled) {

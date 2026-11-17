@@ -448,14 +448,20 @@ permission alerts, because simulator grants don't always take effect and
 flag. For 60 seconds after each `launchApp` of that app, every hierarchy read
 looks for a system permission alert: a refusal button (`Don't Allow`, `Ask App
 Not to Track`, `Keep Only While Using`) with an acceptance button within 200
-points of it. The alert's system wording names its permission, and the driver
+points of it. The alert's system title names its permission (the app's usage
+description is never read), and the driver
 taps the button for the answer the flow gave that permission (for location
 `allow`, While Using and then Always), at most 8 times per launch, before
 returning the hierarchy to Maestro. Alerts for permissions the flow did not
 name are left on screen, `unset` and `{all: unset}` (including `clearState`)
 forget earlier answers, and `{all: allow|deny}`, Maestro's default launch
 permissions, answers nothing, so flows that don't name permissions still see
-the real prompts. Only English alert wording is recognized, an alert that
+the real prompts. Each `setPermissions`, including the one inside `launchApp`,
+first answers the alerts already on screen for the permissions it names, then
+forwards the grant: an alert left over from an earlier launch survives the
+app's restart and would overwrite the grant when answered later, leaving
+location at While Using instead of Always. Only English alert wording is recognized (checked against
+the iOS 18.5, 26.2, 26.5 and 27.0 simulator runtimes), an alert that
 appears after the window or that no hierarchy read sees is not answered, and
 failure artifacts never answer alerts.
 
